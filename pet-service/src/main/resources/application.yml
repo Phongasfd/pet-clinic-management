@@ -2,24 +2,63 @@ spring:
   application:
     name: pet-service
   profiles:
-    active: dev
+    active: dev   # Profile mặc định khi chạy local. Chuyển sang 'local' để dùng DB local riêng.
+
+  # ----------------------------------------------------------------
+  # Kafka Producer Configuration
+  # Các cấu hình này được Spring Boot dùng để tự động tạo KafkaTemplate
+  # ----------------------------------------------------------------
+  kafka:
+    producer:
+      bootstrap-servers: localhost:9092     # Địa chỉ Kafka broker (dùng 'kafka:9092' trong Docker)
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer          # Key = petId (String)
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer     # Value = Protobuf bytes
+      acks: all        # Đợi tất cả replica xác nhận trước khi trả kết quả — đảm bảo độ bền tối đa
+      retries: 3       # Tự động retry 3 lần nếu gửi thất bại do lỗi tạm thời (e.g., network hiccup)
+
+# ----------------------------------------------------------------
+# Custom application properties
+# ----------------------------------------------------------------
+app:
+  kafka:
+    topics:
+      pet-events: pet-events    # Tên Kafka topic để publish, tham chiếu qua @Value trong code
+
+# ----------------------------------------------------------------
+# gRPC Client — Kết nối tới Billing Service qua gRPC
+# ----------------------------------------------------------------
+grpc:
+  client:
+    billing-service:
+      address: 'static://localhost:9090'  # Địa chỉ gRPC server (dùng 'billing-service:9090' trong Docker)
+      negotiation-type: plaintext         # Không dùng TLS (chỉ phù hợp trong mạng nội bộ / dev)
+
+  # ----------------------------------------------------------------
+  # Database — PostgreSQL
+  # Giá trị được đọc từ biến môi trường, có fallback mặc định cho local dev
+  # ----------------------------------------------------------------
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:petclinic}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:password}
     driver-class-name: org.postgresql.Driver
+
   flyway:
-    enabled: true
-    baseline-on-migrate: true
+    enabled: true                   # Tự động chạy migration script khi khởi động
+    baseline-on-migrate: true       # Cho phép chạy trên DB đã có dữ liệu (không phải DB trắng)
+
   jpa:
     hibernate:
-      ddl-auto: validate
+      ddl-auto: validate            # Chỉ kiểm tra schema khớp Entity, KHÔNG tự sửa — an toàn hơn ở production
     show-sql: true
     properties:
       hibernate:
-        format_sql: true
+        format_sql: true            # Format SQL in ra console cho dễ đọc
         dialect: org.hibernate.dialect.PostgreSQLDialect
 
+# ----------------------------------------------------------------
+# Profile: local — Ghi đè datasource khi chạy với --spring.profiles.active=local
+# ----------------------------------------------------------------
 ---
 spring:
   config:
@@ -31,5 +70,5 @@ spring:
     password: ${DB_PASSWORD_LOCAL:password}
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: update    # Tự động tạo/cập nhật bảng khi dev local (không dùng ở production)
     show-sql: true
