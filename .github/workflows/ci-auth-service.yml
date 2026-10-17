@@ -1,0 +1,64 @@
+name: CI — auth-service
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    paths:
+      - 'auth-service/**'
+      - '.github/workflows/ci-auth-service.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+    paths:
+      - 'auth-service/**'
+      - '.github/workflows/ci-auth-service.yml'
+
+jobs:
+  build:
+    name: Build & Test auth-service
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: petclinic_user
+          POSTGRES_PASSWORD: petclinic_password
+          POSTGRES_DB: petclinic_auth
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U petclinic_user"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25 (EA)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25-ea'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Make mvnw executable
+        working-directory: auth-service
+        run: chmod +x mvnw
+
+      - name: Build & Test
+        working-directory: auth-service
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/petclinic_auth
+          SPRING_DATASOURCE_USERNAME: petclinic_user
+          SPRING_DATASOURCE_PASSWORD: petclinic_password
+        run: ./mvnw verify -B
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auth-service-test-reports
+          path: auth-service/target/surefire-reports/
+          retention-days: 7
