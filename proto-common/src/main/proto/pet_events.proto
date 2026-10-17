@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package com.petclinic.events;
+
+option java_multiple_files = true;
+option java_package = "com.petclinic.events";
+
+message PetEvent {
+  string event_id = 1;
+  // Các loại event_type: PET_CREATED, APPOINTMENT_COMPLETED, VACCINATION_SCHEDULED
+  string event_type = 2;
+  int64 timestamp = 3;
+  int64 pet_id = 4;
+  string pet_name = 5;
+  string species = 6;
+  string breed = 7;
+  int64 owner_id = 8;
+  // Dùng để lưu trữ doanh thu từ lịch hẹn (nếu có)
+  double amount = 9;
+}
