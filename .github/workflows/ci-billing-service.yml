@@ -1,0 +1,67 @@
+name: CI — billing-service
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    paths:
+      - 'billing-service/**'
+      - 'proto-common/**'
+      - '.github/workflows/ci-billing-service.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+    paths:
+      - 'billing-service/**'
+      - 'proto-common/**'
+      - '.github/workflows/ci-billing-service.yml'
+
+jobs:
+  build:
+    name: Build & Test billing-service
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: petclinic_user
+          POSTGRES_PASSWORD: petclinic_password
+          POSTGRES_DB: pet_clinic_billing
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U petclinic_user"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25 (EA)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25-ea'
+          distribution: 'temurin'
+          cache: maven
+
+      # proto-common phải được install vào local Maven cache trước
+      - name: Build & install proto-common
+        working-directory: proto-common
+        run: mvn install -DskipTests -B
+
+      - name: Build & Test billing-service
+        working-directory: billing-service
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/pet_clinic_billing
+          SPRING_DATASOURCE_USERNAME: petclinic_user
+          SPRING_DATASOURCE_PASSWORD: petclinic_password
+        run: mvn verify -B
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: billing-service-test-reports
+          path: billing-service/target/surefire-reports/
+          retention-days: 7
