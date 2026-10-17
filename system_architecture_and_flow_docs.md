@@ -40,19 +40,19 @@ flowchart TB
         DB_Analytics[(H2 In-Memory<br/>analyticsdb)]
     end
 
-    Client -->|HTTP REST| Gateway
+    Client -->|"HTTP REST"| Gateway
 
     %% Gateway Routing
-    Gateway -->|/api/v1/auth/**| Auth
-    Gateway -->|/api/v1/pets/**, /owners/**, etc.| Pet
-    Gateway -.->|/api/v1/analytics/**| Analytics
+    Gateway -->|"/api/v1/auth/**"| Auth
+    Gateway -->|"/api/v1/pets/**, /owners/**, etc."| Pet
+    Gateway -.->|"/api/v1/analytics/**"| Analytics
 
     %% Synchronous gRPC
     Pet -->|"gRPC: CreateBillingAccount (Port 9090 HTTP/2)"| Billing
 
     %% Asynchronous Kafka
-    Pet -->|Publish PetEvent (Protobuf byte array)| KafkaBroker
-    KafkaBroker -->|Consume PetEvent<br/>group: analytics-group| Analytics
+    Pet -->|"Publish PetEvent (Protobuf byte array)"| KafkaBroker
+    KafkaBroker -->|"Consume PetEvent<br/>group: analytics-group"| Analytics
 
     %% Databases
     Auth --> DB_Auth
