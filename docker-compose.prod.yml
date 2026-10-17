@@ -1,0 +1,180 @@
+version: '3.8'
+
+# ==============================================================================
+# PET CLINIC MANAGEMENT — PRODUCTION DOCKER COMPOSE CONFIGURATION
+# ==============================================================================
+# Điểm khác biệt so với docker-compose.yml (Local Dev):
+# 1. Bảo mật: 100% mật khẩu, secret key đọc từ file .env (không hardcode).
+# 2. Cô lập mạng (Network Isolation): CHỈ CÓ api-gateway mở port ra ngoài Internet.
+#    Cơ sở dữ liệu (PostgreSQL), Kafka và các microservice nội bộ chỉ giao tiếp
+#    trong mạng bridge nội bộ (petclinic-prod-net), chặn hoàn toàn truy cập trực tiếp.
+# 3. Tính sẵn sàng cao (High Availability): Tất cả containers đều có restart: unless-stopped.
+# 4. Quản lý tài nguyên (Log Rotation): Giới hạn kích thước log để tránh tràn ổ đĩa máy chủ.
+# ==============================================================================
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ============================================================================
+  # INFRASTRUCTURE SERVICES (POSTGRESQL & KAFKA)
+  # ============================================================================
+  postgres-db:
+    image: postgres:15-alpine
+    container_name: petclinic-postgres-prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - postgres-prod-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - petclinic-prod-net
+    logging: *default-logging
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: petclinic-kafka-prod
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-MkU3OEVBNTcwNTJENDM2Qg}
+    volumes:
+      - kafka-prod-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "kafka:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - petclinic-prod-net
+    logging: *default-logging
+
+  # ============================================================================
+  # BACKEND APPLICATION SERVICES (CÔ LẬP NỘI BỘ, KHÔNG EXPOSE RA INTERNET)
+  # ============================================================================
+  auth-service:
+    build:
+      context: ./auth-service
+    container_name: auth-service-prod
+    restart: unless-stopped
+    environment:
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-prod}
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/${DB_AUTH_NAME:-petclinic_auth}
+      - SPRING_DATASOURCE_USERNAME=${DB_USERNAME}
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRATION_MS=${JWT_EXPIRATION_MS:-86400000}
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    networks:
+      - petclinic-prod-net
+    logging: *default-logging
+
+  pet-service:
+    build:
+      context: ./pet-service
+    container_name: pet-service-prod
+    restart: unless-stopped
+    environment:
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-prod}
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/${DB_PETS_NAME:-pet_clinic_pets}
+      - SPRING_DATASOURCE_USERNAME=${DB_USERNAME}
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
+      - GRPC_CLIENT_BILLING-SERVICE_ADDRESS=static://billing-service:9090
+      - SPRING_KAFKA_PRODUCER_BOOTSTRAP-SERVERS=kafka:9092
+      - APP_KAFKA_TOPICS_PET-EVENTS=${KAFKA_TOPIC_PET_EVENTS:-pet-events}
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - petclinic-prod-net
+    logging: *default-logging
+
+  billing-service:
+    build:
+      context: ./billing-service
+    container_name: billing-service-prod
+    restart: unless-stopped
+    environment:
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-prod}
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/${DB_BILLING_NAME:-pet_clinic_billing}
+      - SPRING_DATASOURCE_USERNAME=${DB_USERNAME}
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    networks:
+      - petclinic-prod-net
+    logging: *default-logging
+
+  analytics-service:
+    build:
+      context: ./analytics-service
+    container_name: analytics-service-prod
+    restart: unless-stopped
+    environment:
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-prod}
+      - SPRING_KAFKA_CONSUMER_BOOTSTRAP-SERVERS=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - petclinic-prod-net
+    logging: *default-logging
+
+  # ============================================================================
+  # EDGE GATEWAY (PORTAL DUY NHẤT MỞ RA BÊN NGOÀI)
+  # ============================================================================
+  api-gateway:
+    build:
+      context: ./api-gateway
+    container_name: api-gateway-prod
+    restart: unless-stopped
+    ports:
+      # Duy nhất API Gateway được mở cổng ra ngoài host/Internet
+      - "${GATEWAY_PORT:-8080}:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-prod}
+      - SPRING_CLOUD_GATEWAY_ROUTES_0_URI=http://auth-service:8081
+      - SPRING_CLOUD_GATEWAY_ROUTES_1_URI=http://pet-service:8082
+      - SPRING_CLOUD_GATEWAY_ROUTES_2_URI=http://analytics-service:8084
+      - JWT_SECRET=${JWT_SECRET}
+    depends_on:
+      - auth-service
+      - pet-service
+      - analytics-service
+    networks:
+      - petclinic-prod-net
+    logging: *default-logging
+
+networks:
+  petclinic-prod-net:
+    driver: bridge
+
+volumes:
+  postgres-prod-data:
+  kafka-prod-data:
