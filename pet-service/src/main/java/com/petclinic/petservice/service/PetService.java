@@ -6,6 +6,7 @@ import com.petclinic.petservice.entity.Pet;
 import com.petclinic.petservice.exception.ResourceNotFoundException;
 import com.petclinic.petservice.repository.OwnerRepository;
 import com.petclinic.petservice.repository.PetRepository;
+import com.petclinic.petservice.kafka.PetEventPublisher;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +19,7 @@ public class PetService {
 
     private final PetRepository petRepository;
     private final OwnerRepository ownerRepository;
+    private final PetEventPublisher petEventPublisher;
 
     @Transactional
     public Pet addPet(PetDto.CreateRequest request) {
@@ -37,7 +39,11 @@ public class PetService {
                 .owner(owner)
                 .build();
                 
-        return petRepository.save(pet);
+        Pet savedPet = petRepository.save(pet);
+        
+        petEventPublisher.publishPetCreatedEvent(savedPet);
+        
+        return savedPet;
     }
 
     @Transactional
