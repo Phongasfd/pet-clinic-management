@@ -1,0 +1,41 @@
+name: CI — api-gateway
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    paths:
+      - 'api-gateway/**'
+      - '.github/workflows/ci-api-gateway.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+    paths:
+      - 'api-gateway/**'
+      - '.github/workflows/ci-api-gateway.yml'
+
+jobs:
+  build:
+    name: Build & Test api-gateway
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25 (EA)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25-ea'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build & Test
+        working-directory: api-gateway
+        run: mvn verify -B
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-test-reports
+          path: api-gateway/target/surefire-reports/
+          retention-days: 7
