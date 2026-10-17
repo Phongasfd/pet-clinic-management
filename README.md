@@ -67,7 +67,7 @@ flowchart TB
 
 | Component | Port(s) | Technology Stack | Database / Storage | Key Responsibilities |
 |---|---|---|---|---|
-| [**api-gateway**](file:///d:/pet-clinic-management/api-gateway) | `8080` (HTTP) | Spring Cloud Gateway (Reactive WebFlux), Java 17/25, JJWT | None | Single entry point, CORS management, JWT signature validation, header injection (`X-User-*`), request routing |
+| [**api-gateway**](file:///d:/pet-clinic-management/api-gateway) | `8080` (HTTP) | Spring Cloud Gateway (Reactive WebFlux), Java 17, JJWT | None | Single entry point, CORS management, JWT signature validation, header injection (`X-User-*`), request routing |
 | [**auth-service**](file:///d:/pet-clinic-management/auth-service) | `8081` (HTTP) | Spring Boot 3, Spring Security, Spring Data JPA, PostgreSQL Driver | `petclinic_auth` (PostgreSQL) | User registration, credential verification, BCrypt hashing, JWT generation (`24h` expiration) |
 | [**pet-service**](file:///d:/pet-clinic-management/pet-service) | `8082` (HTTP) | Spring Boot, Spring Data JPA, Flyway, `grpc-client-spring-boot-starter`, `spring-kafka` | `pet_clinic_pets` (PostgreSQL) | Clinic business logic: Pet, Owner, Appointment, Boarding, MedicalRecord, Spa. Calls Billing over gRPC, publishes Kafka events |
 | [**billing-service**](file:///d:/pet-clinic-management/billing-service) | `8083` (HTTP)<br/>`9090` (gRPC) | Spring Boot, `grpc-server-spring-boot-starter`, Spring Data JPA | `pet_clinic_billing` (PostgreSQL) | Customer billing accounts, ledger balances, gRPC RPC implementation for instant account provisioning |

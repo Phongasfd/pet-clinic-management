@@ -5,6 +5,29 @@ spring:
     active: dev   # Profile mặc định khi chạy local. Chuyển sang 'local' để dùng DB local riêng.
 
   # ----------------------------------------------------------------
+  # Database — PostgreSQL
+  # Giá trị được đọc từ biến môi trường, có fallback mặc định cho local dev
+  # ----------------------------------------------------------------
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:pet_clinic_pets}
+    username: ${DB_USERNAME:petclinic_user}
+    password: ${DB_PASSWORD:petclinic_password}
+    driver-class-name: org.postgresql.Driver
+
+  flyway:
+    enabled: true                   # Tự động chạy migration script khi khởi động
+    baseline-on-migrate: true       # Cho phép chạy trên DB đã có dữ liệu (không phải DB trắng)
+
+  jpa:
+    hibernate:
+      ddl-auto: validate            # Chỉ kiểm tra schema khớp Entity, KHÔNG tự sửa — an toàn hơn ở production
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true            # Format SQL in ra console cho dễ đọc
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  # ----------------------------------------------------------------
   # Kafka Producer Configuration
   # Các cấu hình này được Spring Boot dùng để tự động tạo KafkaTemplate
   # ----------------------------------------------------------------
@@ -32,29 +55,6 @@ grpc:
     billing-service:
       address: 'static://localhost:9090'  # Địa chỉ gRPC server (dùng 'billing-service:9090' trong Docker)
       negotiation-type: plaintext         # Không dùng TLS (chỉ phù hợp trong mạng nội bộ / dev)
-
-  # ----------------------------------------------------------------
-  # Database — PostgreSQL
-  # Giá trị được đọc từ biến môi trường, có fallback mặc định cho local dev
-  # ----------------------------------------------------------------
-  datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:petclinic}
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:password}
-    driver-class-name: org.postgresql.Driver
-
-  flyway:
-    enabled: true                   # Tự động chạy migration script khi khởi động
-    baseline-on-migrate: true       # Cho phép chạy trên DB đã có dữ liệu (không phải DB trắng)
-
-  jpa:
-    hibernate:
-      ddl-auto: validate            # Chỉ kiểm tra schema khớp Entity, KHÔNG tự sửa — an toàn hơn ở production
-    show-sql: true
-    properties:
-      hibernate:
-        format_sql: true            # Format SQL in ra console cho dễ đọc
-        dialect: org.hibernate.dialect.PostgreSQLDialect
 
 # ----------------------------------------------------------------
 # Profile: local — Ghi đè datasource khi chạy với --spring.profiles.active=local

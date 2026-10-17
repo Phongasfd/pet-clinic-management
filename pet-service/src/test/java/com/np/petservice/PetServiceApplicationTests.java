@@ -1,13 +1,5 @@
 package com.np.petservice;
 
-import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
-
-@SpringBootTest
-class PetServiceApplicationTests {
-
-    @Test
-    void contextLoads() {
-    }
-
+// This legacy test has been relocated to com.petclinic.petservice.PetServiceApplicationTests
+class LegacyPetServiceApplicationTests {
 }

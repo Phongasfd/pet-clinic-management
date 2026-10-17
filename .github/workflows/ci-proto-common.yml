@@ -38,3 +38,4 @@ jobs:
           name: proto-common-jar
           path: proto-common/target/*.jar
           retention-days: 1
+          if-no-files-found: ignore
