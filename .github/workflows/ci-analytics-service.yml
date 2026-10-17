@@ -1,0 +1,53 @@
+name: CI — analytics-service
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    paths:
+      - 'analytics-service/**'
+      - 'proto-common/**'
+      - '.github/workflows/ci-analytics-service.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+    paths:
+      - 'analytics-service/**'
+      - 'proto-common/**'
+      - '.github/workflows/ci-analytics-service.yml'
+
+jobs:
+  build:
+    name: Build & Test analytics-service
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25 (EA)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25-ea'
+          distribution: 'temurin'
+          cache: maven
+
+      # proto-common phải được install vào local Maven cache trước
+      - name: Build & install proto-common
+        working-directory: proto-common
+        run: mvn install -DskipTests -B
+
+      - name: Build & Test analytics-service
+        working-directory: analytics-service
+        # Dùng H2 in-memory (đã có trong pom.xml) thay vì Postgres thật
+        # Kafka được exclude để test không cần broker thật
+        env:
+          SPRING_AUTOCONFIGURE_EXCLUDE: >-
+            org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+        run: mvn verify -B
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analytics-service-test-reports
+          path: analytics-service/target/surefire-reports/
+          retention-days: 7
