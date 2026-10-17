@@ -1,0 +1,74 @@
+name: CI — pet-service
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    paths:
+      - 'pet-service/**'
+      - 'proto-common/**'
+      - '.github/workflows/ci-pet-service.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+    paths:
+      - 'pet-service/**'
+      - 'proto-common/**'
+      - '.github/workflows/ci-pet-service.yml'
+
+jobs:
+  build:
+    name: Build & Test pet-service
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: petclinic_user
+          POSTGRES_PASSWORD: petclinic_password
+          POSTGRES_DB: pet_clinic_pets
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U petclinic_user"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25 (EA)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25-ea'
+          distribution: 'temurin'
+          cache: maven
+
+      # proto-common phải được install vào local Maven cache trước
+      - name: Build & install proto-common
+        working-directory: proto-common
+        run: mvn install -DskipTests -B
+
+      - name: Make mvnw executable
+        working-directory: pet-service
+        run: chmod +x mvnw
+
+      - name: Build & Test
+        working-directory: pet-service
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/pet_clinic_pets
+          SPRING_DATASOURCE_USERNAME: petclinic_user
+          SPRING_DATASOURCE_PASSWORD: petclinic_password
+          # Kafka & gRPC không cần thiết cho unit test, disable auto-connect
+          SPRING_AUTOCONFIGURE_EXCLUDE: >-
+            org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+        run: ./mvnw verify -B
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pet-service-test-reports
+          path: pet-service/target/surefire-reports/
+          retention-days: 7
