@@ -48,7 +48,7 @@ flowchart TB
     Gateway -.->|/api/v1/analytics/**| Analytics
 
     %% Synchronous gRPC
-    Pet -->|gRPC: CreateBillingAccount<br/>Port 9090 (HTTP/2)| Billing
+    Pet -->|"gRPC: CreateBillingAccount (Port 9090 HTTP/2)"| Billing
 
     %% Asynchronous Kafka
     Pet -->|Publish PetEvent (Protobuf byte array)| KafkaBroker
@@ -457,8 +457,8 @@ erDiagram
     PETS ||--o{ BOARDING_TICKETS : "boards"
     CAGES ||--o{ BOARDING_TICKETS : "assigns"
     PETS ||--o{ SPA_TICKETS : "attends"
-    OWNERS ..> BILLING_ACCOUNTS : "cross-service reference (customer_id)"
-    PETS ..> PET_STATISTICS : "cross-service async stream (species)"
+    OWNERS ||..o{ BILLING_ACCOUNTS : "references customer_id"
+    PETS ||..o{ PET_STATISTICS : "streams species"
 ```
 
 ---

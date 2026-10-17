@@ -2,9 +2,9 @@ package com.petclinic.billingservice.service;
 
 import com.petclinic.billingservice.entity.BillingAccount;
 import com.petclinic.billingservice.repository.BillingAccountRepository;
-import com.petclinic.proto.billing.BillingRequest;
-import com.petclinic.proto.billing.BillingResponse;
-import com.petclinic.proto.billing.BillingServiceGrpc;
+import com.petclinic.billing.grpc.BillingRequest;
+import com.petclinic.billing.grpc.BillingResponse;
+import com.petclinic.billing.grpc.BillingServiceGrpc;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import net.devh.boot.grpc.server.service.GrpcService;
@@ -24,8 +24,9 @@ public class BillingGrpcService extends BillingServiceGrpc.BillingServiceImplBas
     @Override
     public void createBillingAccount(BillingRequest request, StreamObserver<BillingResponse> responseObserver) {
         try {
+            Long customerId = Long.parseLong(request.getCustomerId());
             BillingAccount newAccount = BillingAccount.builder()
-                    .customerId(request.getCustomerId())
+                    .customerId(customerId)
                     .balance(BigDecimal.ZERO)
                     .status(BillingAccount.Status.ACTIVE)
                     .build();
@@ -33,9 +34,9 @@ public class BillingGrpcService extends BillingServiceGrpc.BillingServiceImplBas
             BillingAccount savedAccount = billingAccountRepository.save(newAccount);
 
             BillingResponse response = BillingResponse.newBuilder()
-                    .setAccountId(savedAccount.getId())
-                    .setCustomerId(savedAccount.getCustomerId())
-                    .setStatus("ACTIVE")
+                    .setAccountId(String.valueOf(savedAccount.getId()))
+                    .setStatus(savedAccount.getStatus().name())
+                    .setMessage("Billing account created successfully")
                     .build();
 
             responseObserver.onNext(response);
