@@ -14,9 +14,15 @@ import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 @Component
 public class AuthenticationFilter extends AbstractGatewayFilterFactory<AuthenticationFilter.Config> {
+
+    public static final String HEADER_USER_ID = "X-User-Id";
+    public static final String HEADER_USER_NAME = "X-User-Name";
+    public static final String HEADER_USER_ROLE = "X-User-Role";
+    private static final List<String> IDENTITY_HEADERS = List.of(HEADER_USER_ID, HEADER_USER_NAME, HEADER_USER_ROLE);
 
     private final RouteValidator validator;
     private final JwtUtil jwtUtil;
@@ -30,7 +36,12 @@ public class AuthenticationFilter extends AbstractGatewayFilterFactory<Authentic
     @Override
     public GatewayFilter apply(Config config) {
         return ((exchange, chain) -> {
-            ServerHttpRequest request = exchange.getRequest();
+            // Identity headers are only ever set by this filter. Drop whatever the client sent,
+            // otherwise anyone could call a service as "X-User-Id: 1" / "X-User-Role: ADMIN".
+            ServerHttpRequest request = exchange.getRequest()
+                    .mutate()
+                    .headers(headers -> IDENTITY_HEADERS.forEach(headers::remove))
+                    .build();
 
             if (validator.isSecured.test(request)) {
                 if (!request.getHeaders().containsKey(HttpHeaders.AUTHORIZATION)) {
@@ -50,18 +61,22 @@ public class AuthenticationFilter extends AbstractGatewayFilterFactory<Authentic
                     // Add headers
                     String username = claims.getSubject();
                     String role = claims.get("role", String.class);
-                    // If you have userId in claims, you can extract it similarly:
-                    // String userId = claims.get("id", String.class);
+                    Object userId = claims.get("userId");
+                    if (userId == null || role == null) {
+                        // tokens issued before userId was added: force a re-login
+                        return onError(exchange, "Token is missing required claims, please log in again");
+                    }
 
-                    request = exchange.getRequest()
+                    request = request
                             .mutate()
-                            .header("X-User-Name", username)
-                            .header("X-User-Role", role)
-                            // .header("X-User-Id", userId) 
+                            .header(HEADER_USER_ID, String.valueOf(userId))
+                            .header(HEADER_USER_NAME, username)
+                            .header(HEADER_USER_ROLE, role)
                             .build();
 
                 } catch (Exception e) {
-                    return onError(exchange, "Unauthorized access to application: " + e.getMessage());
+                    // don't echo parser details back to the caller
+                    return onError(exchange, "Invalid or expired token");
                 }
             }
             return chain.filter(exchange.mutate().request(request).build());

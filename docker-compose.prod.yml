@@ -83,7 +83,7 @@ services:
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/${DB_AUTH_NAME:-petclinic_auth}
       - SPRING_DATASOURCE_USERNAME=${DB_USERNAME}
       - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
-      - JWT_SECRET=${JWT_SECRET}
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env (openssl rand -base64 32)}
       - JWT_EXPIRATION_MS=${JWT_EXPIRATION_MS:-86400000}
     depends_on:
       postgres-db:
@@ -138,8 +138,14 @@ services:
     restart: unless-stopped
     environment:
       - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-prod}
-      - SPRING_KAFKA_CONSUMER_BOOTSTRAP-SERVERS=kafka:9092
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/${DB_ANALYTICS_NAME:-pet_clinic_analytics}
+      - SPRING_DATASOURCE_USERNAME=${DB_USERNAME}
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
+      # consumer AND the DLT producer
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     depends_on:
+      postgres-db:
+        condition: service_healthy
       kafka:
         condition: service_healthy
     networks:
@@ -159,10 +165,10 @@ services:
       - "${GATEWAY_PORT:-8080}:8080"
     environment:
       - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-prod}
-      - SPRING_CLOUD_GATEWAY_ROUTES_0_URI=http://auth-service:8081
-      - SPRING_CLOUD_GATEWAY_ROUTES_1_URI=http://pet-service:8082
-      - SPRING_CLOUD_GATEWAY_ROUTES_2_URI=http://analytics-service:8084
-      - JWT_SECRET=${JWT_SECRET}
+      - AUTH_SERVICE_URL=http://auth-service:8081
+      - PET_SERVICE_URL=http://pet-service:8082
+      - ANALYTICS_SERVICE_URL=http://analytics-service:8084
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env (openssl rand -base64 32)}
     depends_on:
       - auth-service
       - pet-service

@@ -1,7 +1,9 @@
 package com.petclinic.analytics.service;
 
 import com.petclinic.analytics.entity.PetStatistic;
+import com.petclinic.analytics.entity.ProcessedEvent;
 import com.petclinic.analytics.repository.PetStatisticRepository;
+import com.petclinic.analytics.repository.ProcessedEventRepository;
 import com.petclinic.events.PetEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +19,7 @@ import java.util.List;
 public class StatisticService {
 
     private final PetStatisticRepository petStatisticRepository;
+    private final ProcessedEventRepository processedEventRepository;
 
     /**
      * Xử lý sự kiện PET_CREATED và cập nhật số liệu thống kê theo species.
@@ -25,6 +28,14 @@ public class StatisticService {
      */
     @Transactional
     public void handlePetCreatedEvent(PetEvent event) {
+        // pet-service delivers at-least-once (outbox relay retries, consumer re-reads after a crash).
+        // Recording the event id in the same transaction as the counter makes the update count once.
+        if (processedEventRepository.existsById(event.getEventId())) {
+            log.info("Skipping duplicate PetEvent id=[{}]", event.getEventId());
+            return;
+        }
+        processedEventRepository.save(new ProcessedEvent(event.getEventId(), LocalDateTime.now()));
+
         String species = event.getSpecies();
 
         PetStatistic statistic = petStatisticRepository.findBySpecies(species)

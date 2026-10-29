@@ -16,6 +16,13 @@ public class UserContextInterceptor implements HandlerInterceptor {
         String username = request.getHeader("X-User-Name");
         String role = request.getHeader("X-User-Role");
 
+        // The gateway sets these after validating the JWT (and strips client-sent copies).
+        // Missing headers mean the request did not come through the gateway.
+        if (isBlank(userId) || isBlank(role)) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            return false;
+        }
+
         UserContext context = UserContext.builder()
                 .userId(userId)
                 .username(username)
@@ -29,5 +36,9 @@ public class UserContextInterceptor implements HandlerInterceptor {
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
         UserContextHolder.clearContext();
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 }

@@ -14,6 +14,9 @@ public class WebMvcConfig implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(userContextInterceptor);
+        // Business APIs require the gateway identity headers; API docs and error pages don't
+        registry.addInterceptor(userContextInterceptor)
+                .addPathPatterns("/api/**")
+                .excludePathPatterns("/v3/api-docs/**", "/swagger-ui/**", "/error");
     }
 }

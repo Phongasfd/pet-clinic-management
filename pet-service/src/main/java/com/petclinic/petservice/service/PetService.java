@@ -6,7 +6,7 @@ import com.petclinic.petservice.entity.Pet;
 import com.petclinic.petservice.exception.ResourceNotFoundException;
 import com.petclinic.petservice.repository.OwnerRepository;
 import com.petclinic.petservice.repository.PetRepository;
-import com.petclinic.petservice.kafka.PetEventPublisher;
+import com.petclinic.petservice.outbox.OutboxService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,7 +19,7 @@ public class PetService {
 
     private final PetRepository petRepository;
     private final OwnerRepository ownerRepository;
-    private final PetEventPublisher petEventPublisher;
+    private final OutboxService outboxService;
 
     @Transactional
     public Pet addPet(PetDto.CreateRequest request) {
@@ -41,7 +41,9 @@ public class PetService {
                 
         Pet savedPet = petRepository.save(pet);
         
-        petEventPublisher.publishPetCreatedEvent(savedPet);
+        // Published to Kafka by OutboxRelay only after this transaction commits
+        // (publishing here sent PET_CREATED even when the insert was rolled back)
+        outboxService.enqueuePetCreated(savedPet);
         
         return savedPet;
     }
