@@ -8,30 +8,28 @@ import lombok.extern.slf4j.Slf4j;
 import net.devh.boot.grpc.client.inject.GrpcClient;
 import org.springframework.stereotype.Service;
 
+import java.util.concurrent.TimeUnit;
+
 @Service
 @Slf4j
 public class BillingClientService {
 
+    // Without a deadline a hung billing-service blocks the caller forever
+    private static final long DEADLINE_SECONDS = 5;
+
     @GrpcClient("billing-service")
     private BillingServiceGrpc.BillingServiceBlockingStub billingStub;
 
-    public BillingResponse createBillingAccount(Long ownerId, String name, String email) {
+    /** Called by OutboxRelay after the owner is committed; billing-service dedupes on customerId. */
+    public BillingResponse createBillingAccount(BillingRequest request) {
         try {
-            log.info("Calling billing-service to create account for ownerId: {}", ownerId);
-            BillingRequest.Builder builder = BillingRequest.newBuilder();
-            if (ownerId != null) {
-                builder.setCustomerId(String.valueOf(ownerId));
-            }
-            if (name != null) {
-                builder.setCustomerName(name);
-            }
-            if (email != null) {
-                builder.setEmail(email);
-            }
-            BillingRequest request = builder.build();
-            return billingStub.createBillingAccount(request);
+            log.info("Calling billing-service to create account for customerId: {}", request.getCustomerId());
+            return billingStub
+                    .withDeadlineAfter(DEADLINE_SECONDS, TimeUnit.SECONDS)
+                    .createBillingAccount(request);
         } catch (StatusRuntimeException e) {
-            log.error("Failed to create billing account for ownerId: {}, reason: {}", ownerId, e.getStatus().getDescription());
+            log.error("Failed to create billing account for customerId: {}, reason: {}",
+                    request.getCustomerId(), e.getStatus());
             throw new RuntimeException("Billing Service is unavailable or failed to process request", e);
         }
     }

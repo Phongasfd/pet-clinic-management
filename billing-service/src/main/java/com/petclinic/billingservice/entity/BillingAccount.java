@@ -18,7 +18,7 @@ public class BillingAccount {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "customer_id", nullable = false)
+    @Column(name = "customer_id", nullable = false, unique = true) // one account per customer
     private Long customerId;
 
     @Column(nullable = false)

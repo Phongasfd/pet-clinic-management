@@ -1,13 +1,13 @@
 package com.petclinic.authservice.dto;
 
-import com.petclinic.authservice.entity.Role;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+// No role field: public self-registration always creates a CUSTOMER.
+// Accepting a role here let anyone sign up as ADMIN.
 @Data
 @Builder
 @AllArgsConstructor
@@ -21,7 +21,4 @@ public class RegisterRequest {
 
     @NotBlank(message = "Full name is required")
     private String fullName;
-
-    @NotNull(message = "Role is required")
-    private Role role;
 }

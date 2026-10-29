@@ -6,32 +6,34 @@ spring:
     name: analytics-service
 
   # ----------------------------------------------------------------
-  # Database — H2 In-Memory (dùng cho dev/demo, thay bằng PostgreSQL ở production)
-  # H2 console có thể truy cập tại: http://localhost:8084/h2-console
+  # Database — PostgreSQL
+  # Trước đây dùng H2 in-memory: mỗi lần restart số liệu về 0 trong khi Kafka offset
+  # vẫn được giữ, nên các event cũ không bao giờ được đếm lại → thống kê sai vĩnh viễn.
   # ----------------------------------------------------------------
   datasource:
-    url: jdbc:h2:mem:analyticsdb    # 'mem:' = tồn tại trong bộ nhớ RAM, mất khi restart
-    driver-class-name: org.h2.Driver
-    username: sa
-    password: password
-  h2:
-    console:
-      enabled: true
-      path: /h2-console             # Đường dẫn UI quản lý H2 database
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:pet_clinic_analytics}
+    username: ${DB_USERNAME:petclinic_user}
+    password: ${DB_PASSWORD:petclinic_password}
+    driver-class-name: org.postgresql.Driver
 
   jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
-      ddl-auto: update              # Tự động tạo/cập nhật bảng dựa theo Entity (chỉ dùng ở dev)
-    show-sql: true                  # In câu SQL ra console để dễ debug
+      ddl-auto: update              # Tự động tạo/cập nhật bảng dựa theo Entity
+    show-sql: false
 
   # ----------------------------------------------------------------
   # Kafka Consumer Configuration
   # Các cấu hình này được Spring Boot dùng để tự động tạo KafkaConsumerFactory
   # ----------------------------------------------------------------
   kafka:
+    # Dùng chung cho consumer VÀ producer: DeadLetterPublishingRecoverer cần producer để
+    # đẩy message lỗi sang pet-events.DLT (trước đây producer mặc định localhost:9092)
+    bootstrap-servers: localhost:9092   # Địa chỉ Kafka broker (dùng 'kafka:9092' trong Docker)
+    producer:
+      # message gốc là byte[] (Protobuf); StringSerializer mặc định làm publish DLT thất bại
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
     consumer:
-      bootstrap-servers: localhost:9092   # Địa chỉ Kafka broker (dùng 'kafka:9092' trong Docker)
       group-id: analytics-group           # Consumer group ID — mỗi group nhận đủ 1 bản copy message
       auto-offset-reset: earliest         # Đọc từ đầu topic nếu chưa có offset đã lưu (phù hợp cho dev)
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer

@@ -31,8 +31,10 @@ public class JwtService {
         return claimsResolver.apply(claims);
     }
 
-    public String generateToken(String username, String role) {
+    // userId is what downstream services key data on (the gateway forwards it as X-User-Id)
+    public String generateToken(Long userId, String username, String role) {
         Map<String, Object> claims = new HashMap<>();
+        claims.put("userId", userId);
         claims.put("role", role);
         return buildToken(claims, username, jwtExpiration);
     }
