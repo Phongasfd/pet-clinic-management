@@ -73,7 +73,8 @@ services:
 
   pet-service:
     build:
-      context: ./pet-service
+      context: .   # repo root: the image also builds proto-common
+      dockerfile: pet-service/Dockerfile
     container_name: pet-service
     ports:
       - "127.0.0.1:8082:8082" # trusts X-User-* headers: must sit behind the gateway
@@ -93,7 +94,8 @@ services:
 
   billing-service:
     build:
-      context: ./billing-service
+      context: .   # repo root: the image also builds proto-common
+      dockerfile: billing-service/Dockerfile
     container_name: billing-service
     ports:
       - "127.0.0.1:8083:8083"
@@ -110,7 +112,8 @@ services:
 
   analytics-service:
     build:
-      context: ./analytics-service
+      context: .   # repo root: the image also builds proto-common
+      dockerfile: analytics-service/Dockerfile
     container_name: analytics-service
     ports:
       - "127.0.0.1:8084:8084"

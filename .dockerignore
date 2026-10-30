@@ -1,0 +1,6 @@
+# Build context is the repo root for services that need proto-common
+.git
+**/target
+**/.idea
+**/*.iml
+.env
