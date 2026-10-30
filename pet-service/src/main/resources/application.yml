@@ -1,3 +1,8 @@
+# Without this the service listened on Spring's default 8080, while docker-compose
+# and the gateway route to pet-service:8082 (every /pets, /owners, ... call failed).
+server:
+  port: ${SERVER_PORT:8082}
+
 spring:
   application:
     name: pet-service

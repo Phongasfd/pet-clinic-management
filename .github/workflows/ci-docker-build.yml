@@ -1,0 +1,37 @@
+name: CI — docker images
+
+# Builds every service image exactly as `docker compose up --build` does, so a broken
+# Dockerfile or build context (e.g. a missing proto-common) fails here instead of on a laptop.
+on:
+  push:
+    branches: [ main, master, develop ]
+    paths:
+      - '**/Dockerfile'
+      - '.dockerignore'
+      - 'docker-compose*.yml'
+      - '**/pom.xml'
+      - 'proto-common/**'
+      - '.github/workflows/ci-docker-build.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+    paths:
+      - '**/Dockerfile'
+      - '.dockerignore'
+      - 'docker-compose*.yml'
+      - '**/pom.xml'
+      - 'proto-common/**'
+      - '.github/workflows/ci-docker-build.yml'
+
+jobs:
+  build:
+    name: docker compose build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build all images
+        env:
+          JWT_SECRET: ci-only-not-a-real-secret   # compose requires it to be set, even for build
+        run: docker compose -f docker-compose.yml build
