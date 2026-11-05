@@ -50,6 +50,13 @@ public class Owner extends Auditable {
     private String address;
 
     /**
+     * auth-service user id of the customer who owns this profile; null for walk-in owners
+     * registered by staff. Used for ownership checks (see AccessGuard).
+     */
+    @Column(name = "user_id", unique = true)
+    private Long userId;
+
+    /**
      * List of pets belonging to this owner.
      */
     @OneToMany(mappedBy = "owner", cascade = CascadeType.ALL, orphanRemoval = true)

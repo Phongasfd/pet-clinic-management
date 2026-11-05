@@ -62,6 +62,8 @@ services:
       - "127.0.0.1:8081:8081" # only the gateway is public
     environment:
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env (openssl rand -base64 32)}
+      - BOOTSTRAP_ADMIN_USERNAME=${BOOTSTRAP_ADMIN_USERNAME:-}
+      - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-}
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/petclinic_auth
       - SPRING_DATASOURCE_USERNAME=petclinic_user
       - SPRING_DATASOURCE_PASSWORD=petclinic_password

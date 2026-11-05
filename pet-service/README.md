@@ -130,12 +130,20 @@
   - Key message là `String.valueOf(petId)` giúp đảm bảo các sự kiện của cùng 1 thú cưng luôn vào cùng Kafka partition.
 
 ### 🔹 Context Propagation & Security
-- `UserContextInterceptor` chặn tất cả các request đến từ API Gateway.
-- Tự động trích xuất các header nhận thực đã được Gateway phân giải:
+- `GatewayHeaderAuthenticationFilter` (Spring Security) đọc các header Gateway đã gắn sau khi xác thực JWT:
   - `X-User-Id`
   - `X-User-Name`
   - `X-User-Role`
-- Lưu trữ vào `UserContextHolder` sử dụng `ThreadLocal`, cho phép các service layer bên trong truy vấn danh tính người gọi mà không cần phụ thuộc trực tiếp vào servlet context. Tự động giải phóng bộ nhớ sau mỗi request (`afterCompletion`).
+- Thiếu header hoặc header sai định dạng → `401`. SecurityContext được xoá sau mỗi request.
+- **Phân quyền theo role** bằng `@PreAuthorize`: `@StaffOnly` (ADMIN, VET, RECEPTIONIST) cho boarding, spa, tìm owner theo SĐT, sửa health-info; `@ClinicalStaffOnly` (ADMIN, VET) cho bệnh án và tiêm chủng.
+- **Phân quyền theo quyền sở hữu** bằng `AccessGuard`: CUSTOMER chỉ truy cập owner profile gắn với tài khoản của mình (`owners.user_id`) cùng pet và lịch hẹn của owner đó; truy cập dữ liệu người khác → `403`.
+- Ma trận đầy đủ: xem mục *Authorization* trong README ở thư mục gốc.
+
+### 🔹 Chống double-booking
+- Check-in chuồng khoá dòng `cages` bằng `SELECT ... FOR UPDATE` trong suốt lúc kiểm tra và đổi trạng thái.
+- Migration V4 thêm partial unique index: mỗi chuồng tối đa 1 lượt lưu `ACTIVE`, mỗi pet tối đa 1 chuồng `ACTIVE`.
+- Đặt lịch hẹn khoá dòng `pets`, từ chối lịch hẹn thứ hai còn hiệu lực trong vòng 30 phút.
+- Trạng thái lịch hẹn và vé spa là state machine; chuyển trạng thái sai → `409`.
 
 ---
 

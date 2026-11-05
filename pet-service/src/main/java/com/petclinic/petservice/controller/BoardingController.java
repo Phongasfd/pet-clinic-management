@@ -1,6 +1,7 @@
 package com.petclinic.petservice.controller;
 
-import com.petclinic.petservice.entity.BoardingTicket;
+import com.petclinic.petservice.dto.BoardingTicketDto;
+import com.petclinic.petservice.security.StaffOnly;
 import com.petclinic.petservice.service.BoardingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -13,15 +14,16 @@ import java.time.LocalDateTime;
 @RestController
 @RequestMapping("/api/v1/boarding")
 @RequiredArgsConstructor
-@Tag(name = "Boarding API", description = "Quản lý lưu chuồng (Khách sạn thú cưng)")
+@StaffOnly
+@Tag(name = "Boarding API", description = "Pet hotel: cage check-in and check-out (staff only)")
 public class BoardingController {
 
     private final BoardingService boardingService;
 
     @PostMapping("/check-in")
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Check-in lưu chuồng")
-    public BoardingTicket checkIn(
+    @Operation(summary = "Check a pet into a cage (409 if the cage is taken or the pet is already boarding)")
+    public BoardingTicketDto.Response checkIn(
             @RequestParam Long petId,
             @RequestParam Long cageId,
             @RequestParam LocalDateTime expectedCheckOutDate,
@@ -30,8 +32,8 @@ public class BoardingController {
     }
 
     @PostMapping("/tickets/{ticketId}/check-out")
-    @Operation(summary = "Check-out hoàn tất lưu chuồng")
-    public BoardingTicket checkOut(@PathVariable Long ticketId) {
+    @Operation(summary = "Check a pet out and free its cage")
+    public BoardingTicketDto.Response checkOut(@PathVariable Long ticketId) {
         return boardingService.checkOut(ticketId);
     }
 }

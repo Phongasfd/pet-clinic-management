@@ -61,7 +61,24 @@ public class Appointment extends Auditable {
         VET, SPA, HOTEL
     }
 
+    /**
+     * PENDING → CONFIRMED → COMPLETED, and PENDING/CONFIRMED → CANCELLED.
+     * COMPLETED and CANCELLED are final: a finished visit can't be reopened.
+     */
     public enum AppointmentStatus {
-        PENDING, CONFIRMED, COMPLETED, CANCELLED
+        PENDING, CONFIRMED, COMPLETED, CANCELLED;
+
+        public boolean canTransitionTo(AppointmentStatus next) {
+            return switch (this) {
+                case PENDING -> next == CONFIRMED || next == CANCELLED;
+                case CONFIRMED -> next == COMPLETED || next == CANCELLED;
+                case COMPLETED, CANCELLED -> false;
+            };
+        }
+
+        /** Still occupies its time slot. */
+        public boolean isActive() {
+            return this == PENDING || this == CONFIRMED;
+        }
     }
 }

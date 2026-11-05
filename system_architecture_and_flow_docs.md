@@ -102,11 +102,11 @@ The API Gateway acts as the gatekeeper for all incoming external traffic.
      * `X-User-Name: <username>`
      * `X-User-Role: <role>`
   5. If validation fails, immediately short-circuits and returns HTTP `401 Unauthorized` with a JSON payload: `{"error": "Unauthorized", "message": "..."}`.
-* **Downstream Context Interceptor in `pet-service`**:
-  * [UserContextInterceptor.java](file:///d:/pet-clinic-management/pet-service/src/main/java/com/petclinic/petservice/filter/UserContextInterceptor.java) reads `X-User-Name`, `X-User-Role`, and `X-User-Id` from HTTP headers.
-  * Returns `401` when `X-User-Id`/`X-User-Role` are missing (request did not come through the gateway). Internal service ports are not published outside the Docker network.
-  * Stores context inside [UserContextHolder.java](file:///d:/pet-clinic-management/pet-service/src/main/java/com/petclinic/petservice/context/UserContextHolder.java) via `ThreadLocal`.
-  * Cleans up after request completion (`afterCompletion`), preventing thread-pool context leakage.
+* **Authorization in `pet-service`** (package `security`):
+  * `GatewayHeaderAuthenticationFilter` turns `X-User-Id` and `X-User-Role` into a Spring Security principal (`CurrentUser`). Missing or malformed headers (non-numeric id, unknown role) leave the request anonymous, which gets `401`. Internal service ports are not published outside the Docker network.
+  * Role rules: `@StaffOnly` (ADMIN, VET, RECEPTIONIST) and `@ClinicalStaffOnly` (ADMIN, VET) are `@PreAuthorize` meta-annotations on the controllers.
+  * Ownership rules: `AccessGuard` checks that a customer only touches the owner profile linked to their account (`owners.user_id`, migration V4) and that owner's pets and appointments. Staff pass. Violations return `403`.
+  * The security context is cleared after every request, so nothing leaks between pooled threads.
 
 ```mermaid
 sequenceDiagram
@@ -132,10 +132,11 @@ sequenceDiagram
     else Valid Token
         GW->>GW: Mutate Request: Add X-User-Id, X-User-Name, X-User-Role
         GW->>Pet: Forward request with enriched headers
-        Pet->>Pet: UserContextInterceptor sets UserContextHolder (ThreadLocal)
+        Pet->>Pet: GatewayHeaderAuthenticationFilter sets the principal
+        Pet->>Pet: @PreAuthorize role check, AccessGuard ownership check
         Pet->>Pet: Execute business logic
         Pet-->>Client: 201 Created (Pet JSON)
-        Pet->>Pet: UserContextHolder.clearContext()
+        Pet->>Pet: Security context cleared
     end
 ```
 

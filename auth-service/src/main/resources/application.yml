@@ -23,3 +23,9 @@ jwt:
   # to git lets anyone mint valid tokens. Generate one with: openssl rand -base64 32
   secret: ${JWT_SECRET}
   expiration-ms: ${JWT_EXPIRATION_MS:86400000} # 24 hours
+
+app:
+  # First admin account, created on startup when both are set (see AdminBootstrap)
+  bootstrap-admin:
+    username: ${BOOTSTRAP_ADMIN_USERNAME:}
+    password: ${BOOTSTRAP_ADMIN_PASSWORD:}

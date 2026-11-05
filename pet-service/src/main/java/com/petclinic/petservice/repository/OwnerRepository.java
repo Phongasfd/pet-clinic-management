@@ -6,8 +6,15 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.Optional;
+
 @Repository
 public interface OwnerRepository extends JpaRepository<Owner, Long> {
-    // Tìm kiếm gần đúng theo số điện thoại (có phân trang)
+
+    // Partial match on phone number (paged)
     Page<Owner> findByPhoneNumberContaining(String phoneNumber, Pageable pageable);
+
+    Optional<Owner> findByUserId(Long userId);
+
+    boolean existsByUserId(Long userId);
 }

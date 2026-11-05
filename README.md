@@ -24,7 +24,10 @@ A veterinary clinic backend: owners, pets, medical records, vaccinations, appoin
 | **Dual write:** a DB insert plus a gRPC call or Kafka publish can half-succeed | **Transactional Outbox.** The side effect is stored as an `outbox_events` row in the *same* transaction as the business data. A relay delivers it after commit using `SELECT ... FOR UPDATE SKIP LOCKED` (safe with several instances), with exponential backoff (2s up to 5 min, max 10 attempts). |
 | **At-least-once delivery means duplicates** | Every receiver is **idempotent**. billing-service dedupes on `customer_id` (unique; a concurrent insert resolves to the winner). analytics-service records `event_id` in `processed_events` in the same transaction as the counter. |
 | **Trusting identity headers behind a gateway** | The gateway strips client-sent `X-User-*` on *every* route, verifies the JWT, then injects `X-User-Id/Name/Role`. Internal services expose no public ports, and pet-service rejects requests without gateway headers. The whitelist uses exact paths. |
-| **Privilege escalation and leaked secrets** | Self-registration always creates `CUSTOMER`. The JWT secret comes only from the environment, with no default. Bad credentials return 401 and duplicates 409 (never 500). |
+| **Privilege escalation and leaked secrets** | Self-registration always creates `CUSTOMER`; staff accounts are created by an admin (`POST /api/v1/auth/staff`), and the first admin comes from the environment. The JWT secret comes only from the environment, with no default. Bad credentials return 401 and duplicates 409 (never 500). |
+| **IDOR: every customer has the same role** | A role check alone would let any customer read another's pets by changing an id in the URL. pet-service runs Spring Security on the gateway headers: **role rules** with `@PreAuthorize` (`@StaffOnly`, `@ClinicalStaffOnly`), plus **ownership rules** in the services (`AccessGuard`): an owner profile is linked to the customer's account (`owners.user_id`), and every pet, owner and appointment access is checked against it. See [Authorization](#authorization). |
+| **Double booking under concurrency** | Cage check-in used to read `status = AVAILABLE` and then write `OCCUPIED` without a lock, so concurrent requests could all get the same cage. Now the cage row is locked (`SELECT ... FOR UPDATE`) for the check, and **partial unique indexes** (`WHERE status = 'ACTIVE'`) make "one active stay per cage, one cage per pet" hold even for code that skips the lock. Appointment booking locks the pet row and rejects a second active appointment within 30 minutes. Both are proven by tests that fire 8 to 16 concurrent transactions at PostgreSQL. |
+| **Illegal state changes** | Appointment and spa statuses are state machines (`canTransitionTo`): a completed visit can't go back to `PENDING`, a spa ticket can't skip `IN_PROGRESS`. Invalid transitions return 409. |
 | **Poison messages and lost analytics** | `DefaultErrorHandler` retries 3 times, then sends the message to `pet-events.DLT`. Analytics state lives in PostgreSQL, not in-memory H2, so it survives restarts in step with Kafka offsets. |
 
 ## Architecture
@@ -109,53 +112,80 @@ Adding a pet works the same way, except the relay publishes a `PetEvent`. It is 
 
 ```bash
 cp .env.example .env
-# set JWT_SECRET, e.g. openssl rand -base64 32
+# set JWT_SECRET (openssl rand -base64 32) and BOOTSTRAP_ADMIN_PASSWORD
 docker compose up --build
 ```
 
 The gateway listens on `http://localhost:8080`. Try the main flow:
 
 ```bash
-# 1. register and log in
+login() { curl -s -X POST localhost:8080/api/v1/auth/login -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$1\",\"password\":\"$2\"}" | sed 's/.*"token":"\([^"]*\)".*/\1/'; }
+
+# 1. a customer signs up and logs in
 curl -s -X POST localhost:8080/api/v1/auth/register -H 'Content-Type: application/json' \
   -d '{"username":"alice","password":"secret123","fullName":"Alice"}'
-TOKEN=$(curl -s -X POST localhost:8080/api/v1/auth/login -H 'Content-Type: application/json' \
-  -d '{"username":"alice","password":"secret123"}' | sed 's/.*"token":"\([^"]*\)".*/\1/')
+TOKEN=$(login alice secret123)
 
-# 2. create an owner (billing account follows via the outbox) and a pet (event goes to Kafka)
-curl -s -X POST localhost:8080/api/v1/owners -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"fullName":"Nguyen Van A","phoneNumber":"0900000000","email":"a@example.com"}'
+# 2. her owner profile (linked to her account; billing account follows via the outbox)
+#    and a pet (PET_CREATED goes to Kafka)
+OWNER_ID=$(curl -s -X POST localhost:8080/api/v1/owners -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"fullName":"Nguyen Van A","phoneNumber":"0900000000","email":"a@example.com"}' | sed 's/.*"id":\([0-9]*\).*/\1/')
 curl -s -X POST localhost:8080/api/v1/pets -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"Milu","species":"DOG","ownerId":1}'
+  -d "{\"name\":\"Milu\",\"species\":\"DOG\",\"ownerId\":$OWNER_ID}"
+curl -s localhost:8080/api/v1/pets/owner/1 -H "Authorization: Bearer $TOKEN"   # 403: owner 1 is someone else
 
 # 3. a second later, analytics has counted it
 curl -s localhost:8080/api/v1/analytics/summary -H "Authorization: Bearer $TOKEN"
+
+# 4. staff: the bootstrap admin creates a vet, who can write medical records
+ADMIN=$(login admin "$(grep '^BOOTSTRAP_ADMIN_PASSWORD=' .env | cut -d= -f2-)")
+curl -s -X POST localhost:8080/api/v1/auth/staff -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d '{"username":"vet1","password":"secret123","fullName":"Dr. Vet","role":"VET"}'
 ```
 
-> Upgrading an existing Postgres volume? `postgres-init.sql` only runs on a fresh volume, so create the analytics DB once: `CREATE DATABASE pet_clinic_analytics;`
+> Upgrading an existing Postgres volume? `postgres-init.sql` only runs on a fresh volume, so create the analytics DB once: `CREATE DATABASE pet_clinic_analytics;`. Owners created before migration V4 have no `user_id`, so only staff can see them until one is linked.
+
+## Authorization
+
+The gateway authenticates (JWT); pet-service authorizes. Role rules sit on the controllers, ownership rules in the services, so a customer is limited both in *what* they can do and *whose* data they can touch.
+
+| Endpoint | CUSTOMER | RECEPTIONIST | VET | ADMIN |
+| --- | --- | --- | --- | --- |
+| `POST /owners` | own profile only (linked to their account, one per account) | walk-in owners, may link an account | same | same |
+| `GET /owners/me` | yes | | | |
+| `GET /owners/{id}`, `GET /pets/owner/{id}` | own only | all | all | all |
+| `GET /owners?phone=` | no | yes | yes | yes |
+| `POST /pets` | to own profile only | yes | yes | yes |
+| `PATCH /pets/{id}/health-info` | no | yes | yes | yes |
+| `POST /pets/{id}/medical-records`, `/vaccinations` | no | no | yes | yes |
+| `POST /appointments` | for own pets | yes | yes | yes |
+| `PATCH /appointments/{id}/status` | cancel own only | any valid transition | same | same |
+| `/boarding/**`, `/spa-tickets/**` | no | yes | yes | yes |
+
+Wrong role or someone else's data: 403. No gateway headers: 401. A customer's 403 for another customer's id is decided before anything about that record is returned.
 
 ## Testing
 
 ```bash
 (cd proto-common && mvn install -DskipTests)            # shared contracts first
 for s in api-gateway auth-service billing-service analytics-service; do (cd $s && mvn test); done
-(cd pet-service && ./mvnw test)                          # contextLoads needs PostgreSQL (CI provides it)
+(cd pet-service && ./mvnw verify)                        # no Docker or local Postgres needed
 ```
 
-There are 26 unit tests, plus `contextLoads` in CI. The `contextLoads` run starts pet-service on PostgreSQL, so it also checks that the Flyway migrations match the entities (`ddl-auto: validate`).
+pet-service's integration tests start a real PostgreSQL (zonky embedded binaries) and an in-JVM Kafka broker, so row locks, partial unique indexes and the outbox relay run as in production, and Flyway V1-V4 are checked against the entities (`ddl-auto: validate`). pet-service has 60 tests (14 of them integration); auth-service has 8.
 
 | Service | What is covered |
 | --- | --- |
 | api-gateway | Spoofed `X-User-*` stripped on secured and open routes; missing or legacy tokens rejected; `contains()` whitelist bypass closed |
-| auth-service | Self-registration always `CUSTOMER`; 401 and 409 instead of 500; `userId` in the token |
-| pet-service | Relay success, failure with backoff, one bad row not blocking the batch, backoff cap; owner duplicate handling; gateway-header check |
+| auth-service | Self-registration always `CUSTOMER`; only an admin creates staff; bootstrap admin is idempotent; 401 and 409 instead of 500; `userId` in the token |
+| pet-service | **Concurrency:** 16 simultaneous check-ins for one cage → exactly one wins; one pet into 8 cages at once → one stay; 8 simultaneous bookings for one slot → one appointment. **Authorization over HTTP:** 401 without gateway headers, customer A gets 403 on customer B's owner, pets and appointments, role rules per endpoint. **Outbox end to end:** `PET_CREATED` reaches Kafka keyed by `petId`; billing down → retried with backoff → delivered. Plus unit tests for the relay, state machines, slot overlap and owner linking |
 | billing-service | Idempotent create, concurrent insert race, invalid id |
 | analytics-service | Counts a new event once; ignores a redelivered one |
 
 ## Roadmap
 
-- Role-based authorization inside pet-service (e.g. only `VET` writes medical records; customers see only their own pets).
 - Distributed tracing across HTTP, gRPC and Kafka with OpenTelemetry, plus RED metrics.
 - RS256 and JWKS; short-lived access tokens with refresh.
-- Testcontainers end-to-end test of the full outbox flow.
+- Cross-service end-to-end test (pet-service → Kafka → analytics-service) on docker compose.
 - Outbox cleanup job, and alerts on rows that reach the attempt limit.

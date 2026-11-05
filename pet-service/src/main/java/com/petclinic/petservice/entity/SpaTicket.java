@@ -65,7 +65,16 @@ public class SpaTicket extends Auditable {
     @Column(name = "estimated_price")
     private BigDecimal estimatedPrice;
 
+    /** Moves forward only: RECEIVED → IN_PROGRESS → COMPLETED. */
     public enum SpaStatus {
-        RECEIVED, IN_PROGRESS, COMPLETED
+        RECEIVED, IN_PROGRESS, COMPLETED;
+
+        public boolean canTransitionTo(SpaStatus next) {
+            return switch (this) {
+                case RECEIVED -> next == IN_PROGRESS;
+                case IN_PROGRESS -> next == COMPLETED;
+                case COMPLETED -> false;
+            };
+        }
     }
 }

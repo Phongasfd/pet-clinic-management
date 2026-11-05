@@ -1,6 +1,8 @@
 package com.petclinic.petservice.controller;
 
+import com.petclinic.petservice.dto.SpaTicketDto;
 import com.petclinic.petservice.entity.SpaTicket;
+import com.petclinic.petservice.security.StaffOnly;
 import com.petclinic.petservice.service.SpaService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -14,15 +16,16 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/spa-tickets")
 @RequiredArgsConstructor
-@Tag(name = "Spa API", description = "Quản lý vé dịch vụ Spa")
+@StaffOnly
+@Tag(name = "Spa API", description = "Spa and grooming tickets (staff only)")
 public class SpaController {
 
     private final SpaService spaService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Tạo vé Spa mới")
-    public SpaTicket createSpaTicket(
+    @Operation(summary = "Create a spa ticket")
+    public SpaTicketDto.Response createSpaTicket(
             @RequestParam Long petId,
             @RequestParam List<String> services,
             @RequestParam(required = false) String coatCondition,
@@ -31,8 +34,8 @@ public class SpaController {
     }
 
     @PatchMapping("/{ticketId}/status")
-    @Operation(summary = "Cập nhật trạng thái vé Spa")
-    public SpaTicket updateStatus(
+    @Operation(summary = "Move a spa ticket forward: RECEIVED → IN_PROGRESS → COMPLETED")
+    public SpaTicketDto.Response updateStatus(
             @PathVariable Long ticketId,
             @RequestParam SpaTicket.SpaStatus newStatus) {
         return spaService.updateStatus(ticketId, newStatus);

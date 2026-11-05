@@ -91,7 +91,7 @@ sequenceDiagram
         JWT-->>GW: Claims (username="dr_john", role="VET")
         GW->>GW: Mutate Request: Add Header X-User-Name, X-User-Role
         GW->>Pet: Forward Request kèm X-User-Name, X-User-Role
-        Pet->>Pet: UserContextInterceptor trích xuất danh tính
+        Pet->>Pet: GatewayHeaderAuthenticationFilter trích xuất danh tính, @PreAuthorize + AccessGuard phân quyền
         Pet-->>GW: 200 OK (Danh sách thú cưng)
         GW-->>Client: 200 OK (Danh sách thú cưng)
     end
