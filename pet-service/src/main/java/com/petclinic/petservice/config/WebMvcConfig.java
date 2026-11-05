@@ -1,22 +1,13 @@
 package com.petclinic.petservice.config;
 
-import com.petclinic.petservice.filter.UserContextInterceptor;
-import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
-import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import org.springframework.data.web.config.EnableSpringDataWebSupport;
 
+/**
+ * Pages are serialized as a stable {@code {content, page}} DTO instead of Spring's internal
+ * {@code PageImpl}, whose JSON shape is not a supported contract and logs a warning.
+ */
 @Configuration
-@RequiredArgsConstructor
-public class WebMvcConfig implements WebMvcConfigurer {
-
-    private final UserContextInterceptor userContextInterceptor;
-
-    @Override
-    public void addInterceptors(InterceptorRegistry registry) {
-        // Business APIs require the gateway identity headers; API docs and error pages don't
-        registry.addInterceptor(userContextInterceptor)
-                .addPathPatterns("/api/**")
-                .excludePathPatterns("/v3/api-docs/**", "/swagger-ui/**", "/error");
-    }
+@EnableSpringDataWebSupport(pageSerializationMode = EnableSpringDataWebSupport.PageSerializationMode.VIA_DTO)
+public class WebMvcConfig {
 }

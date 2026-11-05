@@ -1,6 +1,7 @@
 package com.petclinic.authservice.service;
 
 import com.petclinic.authservice.dto.AuthResponse;
+import com.petclinic.authservice.dto.CreateStaffRequest;
 import com.petclinic.authservice.dto.LoginRequest;
 import com.petclinic.authservice.dto.RegisterRequest;
 import com.petclinic.authservice.entity.Role;
@@ -29,15 +30,42 @@ public class AuthService {
     private long jwtExpiration;
 
     public void register(RegisterRequest request) {
-        if (userRepository.existsByUsername(request.getUsername())) {
+        createUser(request.getUsername(), request.getPassword(), request.getFullName(), SELF_REGISTERED_ROLE);
+    }
+
+    /**
+     * Staff accounts are created by an admin. {@code callerRole} is the X-User-Role header the
+     * gateway sets from the caller's verified JWT (client-sent copies are stripped there).
+     */
+    public void createStaff(CreateStaffRequest request, String callerRole) {
+        if (!Role.ADMIN.name().equals(callerRole)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only an admin can create staff accounts");
+        }
+        if (request.getRole() == Role.CUSTOMER) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customers sign up with /register");
+        }
+        createUser(request.getUsername(), request.getPassword(), request.getFullName(), request.getRole());
+    }
+
+    /** First admin, from the environment (see AdminBootstrap). Idempotent across restarts. */
+    public boolean ensureAdmin(String username, String password) {
+        if (userRepository.existsByUsername(username)) {
+            return false;
+        }
+        createUser(username, password, "Administrator", Role.ADMIN);
+        return true;
+    }
+
+    private void createUser(String username, String password, String fullName, Role role) {
+        if (userRepository.existsByUsername(username)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Username already exists");
         }
 
         User user = User.builder()
-                .username(request.getUsername())
-                .password(passwordEncoder.encode(request.getPassword()))
-                .fullName(request.getFullName())
-                .role(SELF_REGISTERED_ROLE)
+                .username(username)
+                .password(passwordEncoder.encode(password))
+                .fullName(fullName)
+                .role(role)
                 .enabled(true)
                 .build();
 

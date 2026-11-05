@@ -19,21 +19,8 @@ jobs:
     name: Build & Test pet-service
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: petclinic_user
-          POSTGRES_PASSWORD: petclinic_password
-          POSTGRES_DB: pet_clinic_pets
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U petclinic_user"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
+    # No service containers: the integration tests start their own PostgreSQL
+    # (zonky embedded binaries) and Kafka (spring-kafka-test, in the JVM).
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -56,13 +43,6 @@ jobs:
 
       - name: Build & Test
         working-directory: pet-service
-        env:
-          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/pet_clinic_pets
-          SPRING_DATASOURCE_USERNAME: petclinic_user
-          SPRING_DATASOURCE_PASSWORD: petclinic_password
-          # Kafka & gRPC không cần thiết cho unit test, disable auto-connect
-          SPRING_AUTOCONFIGURE_EXCLUDE: >-
-            org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
         run: ./mvnw verify -B
 
       - name: Upload test reports

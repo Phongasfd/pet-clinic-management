@@ -1,11 +1,13 @@
 package com.petclinic.authservice.controller;
 
 import com.petclinic.authservice.dto.AuthResponse;
+import com.petclinic.authservice.dto.CreateStaffRequest;
 import com.petclinic.authservice.dto.LoginRequest;
 import com.petclinic.authservice.dto.RegisterRequest;
 import com.petclinic.authservice.service.AuthService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,6 +22,15 @@ public class AuthController {
     public ResponseEntity<String> register(@Valid @RequestBody RegisterRequest request) {
         authService.register(request);
         return ResponseEntity.ok("User registered successfully");
+    }
+
+    /** Admin only. Not on the gateway's open list, so the gateway requires a JWT and sets X-User-Role. */
+    @PostMapping("/staff")
+    public ResponseEntity<String> createStaff(
+            @RequestHeader(value = "X-User-Role", required = false) String callerRole,
+            @Valid @RequestBody CreateStaffRequest request) {
+        authService.createStaff(request, callerRole);
+        return ResponseEntity.status(HttpStatus.CREATED).body("Staff account created");
     }
 
     @PostMapping("/login")

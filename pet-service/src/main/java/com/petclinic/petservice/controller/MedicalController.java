@@ -1,7 +1,7 @@
 package com.petclinic.petservice.controller;
 
-import com.petclinic.petservice.entity.MedicalRecord;
-import com.petclinic.petservice.entity.Vaccination;
+import com.petclinic.petservice.dto.MedicalDto;
+import com.petclinic.petservice.security.ClinicalStaffOnly;
 import com.petclinic.petservice.service.MedicalService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -14,15 +14,16 @@ import java.time.LocalDate;
 @RestController
 @RequestMapping("/api/v1/pets/{petId}")
 @RequiredArgsConstructor
-@Tag(name = "Medical API", description = "Quản lý bệnh án và tiêm chủng")
+@ClinicalStaffOnly
+@Tag(name = "Medical API", description = "Medical records and vaccinations (vets and admins only)")
 public class MedicalController {
 
     private final MedicalService medicalService;
 
     @PostMapping("/medical-records")
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Tạo hồ sơ bệnh án mới cho thú cưng")
-    public MedicalRecord createMedicalRecord(
+    @Operation(summary = "Create a medical record for a pet")
+    public MedicalDto.MedicalRecordResponse createMedicalRecord(
             @PathVariable Long petId,
             @RequestParam String reason,
             @RequestParam(required = false) String symptoms,
@@ -34,8 +35,8 @@ public class MedicalController {
 
     @PostMapping("/vaccinations")
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Ghi nhận lịch tiêm chủng")
-    public Vaccination logVaccination(
+    @Operation(summary = "Record a vaccination")
+    public MedicalDto.VaccinationResponse logVaccination(
             @PathVariable Long petId,
             @RequestParam String vaccineName,
             @RequestParam LocalDate administeredDate,

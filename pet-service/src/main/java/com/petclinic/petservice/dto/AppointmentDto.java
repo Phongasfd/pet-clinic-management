@@ -14,14 +14,14 @@ public class AppointmentDto {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class Request {
-        @NotNull(message = "ID của thú cưng không được để trống")
+        @NotNull(message = "Pet id is required")
         private Long petId;
 
-        @NotNull(message = "Loại dịch vụ không được để trống")
+        @NotNull(message = "Service type is required")
         private Appointment.ServiceType serviceType;
 
-        @NotNull(message = "Ngày hẹn không được để trống")
-        @Future(message = "Ngày hẹn phải ở trong tương lai")
+        @NotNull(message = "Appointment date is required")
+        @Future(message = "Appointment date must be in the future")
         private LocalDateTime appointmentDate;
 
         private String notes;
@@ -38,5 +38,16 @@ public class AppointmentDto {
         private LocalDateTime appointmentDate;
         private Appointment.AppointmentStatus status;
         private String notes;
+
+        public static Response from(Appointment appointment) {
+            return Response.builder()
+                    .id(appointment.getId())
+                    .petId(appointment.getPet().getId())
+                    .serviceType(appointment.getServiceType())
+                    .appointmentDate(appointment.getAppointmentDate())
+                    .status(appointment.getStatus())
+                    .notes(appointment.getNotes())
+                    .build();
+        }
     }
 }

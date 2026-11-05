@@ -2,6 +2,7 @@ package com.petclinic.petservice.exception;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -32,14 +33,21 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.BAD_REQUEST, ex.getMessage(), request, null);
     }
 
+    /** Wrong role (@PreAuthorize) or someone else's data (AccessGuard). */
+    @ExceptionHandler(AccessDeniedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public ErrorResponse handleAccessDenied(AccessDeniedException ex, HttpServletRequest request) {
+        return buildErrorResponse(HttpStatus.FORBIDDEN, ex.getMessage(), request, null);
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public ErrorResponse handleValidationExceptions(MethodArgumentNotValidException ex, HttpServletRequest request) {
         Map<String, String> errors = new HashMap<>();
-        ex.getBindingResult().getFieldErrors().forEach(error -> 
+        ex.getBindingResult().getFieldErrors().forEach(error ->
             errors.put(error.getField(), error.getDefaultMessage()));
-            
-        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Dữ liệu đầu vào không hợp lệ", request, errors);
+
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Request validation failed", request, errors);
     }
 
     private ErrorResponse buildErrorResponse(HttpStatus status, String message, HttpServletRequest request, Map<String, String> validationErrors) {

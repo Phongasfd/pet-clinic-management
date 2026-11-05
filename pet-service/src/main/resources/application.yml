@@ -27,6 +27,9 @@ spring:
     hibernate:
       ddl-auto: validate            # Chỉ kiểm tra schema khớp Entity, KHÔNG tự sửa — an toàn hơn ở production
     show-sql: true
+    # Services map entities to DTOs inside their transaction, so no lazy loading happens
+    # while the JSON is written (and no DB connection is held for the whole request).
+    open-in-view: false
     properties:
       hibernate:
         format_sql: true            # Format SQL in ra console cho dễ đọc

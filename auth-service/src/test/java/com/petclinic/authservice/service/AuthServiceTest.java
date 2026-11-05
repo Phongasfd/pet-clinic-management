@@ -1,5 +1,6 @@
 package com.petclinic.authservice.service;
 
+import com.petclinic.authservice.dto.CreateStaffRequest;
 import com.petclinic.authservice.dto.LoginRequest;
 import com.petclinic.authservice.dto.RegisterRequest;
 import com.petclinic.authservice.entity.Role;
@@ -72,5 +73,46 @@ class AuthServiceTest {
         when(jwtService.generateToken(7L, "bob", "VET")).thenReturn("jwt");
 
         assertEquals("jwt", authService.login(LoginRequest.builder().username("bob").password("right").build()).getToken());
+    }
+
+    private static CreateStaffRequest staff(Role role) {
+        return CreateStaffRequest.builder().username("vet1").password("pw").fullName("Dr. Vet").role(role).build();
+    }
+
+    @Test
+    void createStaff_onlyAdminsMayCreateStaff() {
+        for (String caller : new String[]{null, "CUSTOMER", "VET", "RECEPTIONIST"}) {
+            ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                    () -> authService.createStaff(staff(Role.VET), caller));
+            assertEquals(HttpStatus.FORBIDDEN, e.getStatusCode());
+        }
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void createStaff_adminCreatesAccountWithTheRequestedRole() {
+        authService.createStaff(staff(Role.VET), "ADMIN");
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(saved.capture());
+        assertEquals(Role.VET, saved.getValue().getRole());
+        assertTrue(encoder.matches("pw", saved.getValue().getPassword()));
+    }
+
+    @Test
+    void createStaff_customersUseRegisterInstead() {
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> authService.createStaff(staff(Role.CUSTOMER), "ADMIN"));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
+    }
+
+    @Test
+    void ensureAdmin_isIdempotent() {
+        // first startup: checked by ensureAdmin and again by createUser; second startup: exists
+        when(userRepository.existsByUsername("admin")).thenReturn(false, false, true);
+
+        assertTrue(authService.ensureAdmin("admin", "secret"));
+        assertFalse(authService.ensureAdmin("admin", "secret"));
+        verify(userRepository, times(1)).save(any());
     }
 }
