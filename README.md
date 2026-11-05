@@ -170,23 +170,22 @@ Wrong role or someone else's data: 403. No gateway headers: 401. A customer's 40
 ```bash
 (cd proto-common && mvn install -DskipTests)            # shared contracts first
 for s in api-gateway auth-service billing-service analytics-service; do (cd $s && mvn test); done
-(cd pet-service && ./mvnw test)                          # contextLoads needs PostgreSQL (CI provides it)
+(cd pet-service && ./mvnw verify)                        # no Docker or local Postgres needed
 ```
 
-There are 26 unit tests, plus `contextLoads` in CI. The `contextLoads` run starts pet-service on PostgreSQL, so it also checks that the Flyway migrations match the entities (`ddl-auto: validate`).
+pet-service's integration tests start a real PostgreSQL (zonky embedded binaries) and an in-JVM Kafka broker, so row locks, partial unique indexes and the outbox relay run as in production, and Flyway V1-V4 are checked against the entities (`ddl-auto: validate`). pet-service has 60 tests (14 of them integration); auth-service has 8.
 
 | Service | What is covered |
 | --- | --- |
 | api-gateway | Spoofed `X-User-*` stripped on secured and open routes; missing or legacy tokens rejected; `contains()` whitelist bypass closed |
-| auth-service | Self-registration always `CUSTOMER`; 401 and 409 instead of 500; `userId` in the token |
-| pet-service | Relay success, failure with backoff, one bad row not blocking the batch, backoff cap; owner duplicate handling; gateway-header check |
+| auth-service | Self-registration always `CUSTOMER`; only an admin creates staff; bootstrap admin is idempotent; 401 and 409 instead of 500; `userId` in the token |
+| pet-service | **Concurrency:** 16 simultaneous check-ins for one cage → exactly one wins; one pet into 8 cages at once → one stay; 8 simultaneous bookings for one slot → one appointment. **Authorization over HTTP:** 401 without gateway headers, customer A gets 403 on customer B's owner, pets and appointments, role rules per endpoint. **Outbox end to end:** `PET_CREATED` reaches Kafka keyed by `petId`; billing down → retried with backoff → delivered. Plus unit tests for the relay, state machines, slot overlap and owner linking |
 | billing-service | Idempotent create, concurrent insert race, invalid id |
 | analytics-service | Counts a new event once; ignores a redelivered one |
 
 ## Roadmap
 
-- Role-based authorization inside pet-service (e.g. only `VET` writes medical records; customers see only their own pets).
 - Distributed tracing across HTTP, gRPC and Kafka with OpenTelemetry, plus RED metrics.
 - RS256 and JWKS; short-lived access tokens with refresh.
-- Testcontainers end-to-end test of the full outbox flow.
+- Cross-service end-to-end test (pet-service → Kafka → analytics-service) on docker compose.
 - Outbox cleanup job, and alerts on rows that reach the attempt limit.

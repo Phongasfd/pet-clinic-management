@@ -60,7 +60,8 @@ class OwnerServiceTest {
     void createOwner_queuesBillingAccountInsteadOfCallingGrpcInline() {
         OwnerDto.Response saved = ownerService.createOwner(request());
 
-        verify(outboxService).enqueueBillingAccount(savedOwner());
+        Owner persisted = savedOwner(); // not inline: a verify() inside verify() is unfinished verification
+        verify(outboxService).enqueueBillingAccount(persisted);
         assertEquals(5L, saved.getId());
     }
 
@@ -97,7 +98,8 @@ class OwnerServiceTest {
 
     @Test
     void createOwner_duplicatePhone() {
-        when(ownerRepository.saveAndFlush(any())).thenThrow(new DataIntegrityViolationException("uk_phone"));
+        // doThrow, not when(...): when() would call the setUp answer with a null argument
+        doThrow(new DataIntegrityViolationException("uk_phone")).when(ownerRepository).saveAndFlush(any());
 
         assertThrows(DuplicateResourceException.class, () -> ownerService.createOwner(request()));
         verifyNoInteractions(outboxService);
@@ -105,7 +107,7 @@ class OwnerServiceTest {
 
     @Test
     void createOwner_otherDbErrorsAreNotReportedAsDuplicate() {
-        when(ownerRepository.saveAndFlush(any())).thenThrow(new IllegalStateException("connection refused"));
+        doThrow(new IllegalStateException("connection refused")).when(ownerRepository).saveAndFlush(any());
 
         assertThrows(IllegalStateException.class, () -> ownerService.createOwner(request()));
     }
