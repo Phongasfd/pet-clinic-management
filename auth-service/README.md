@@ -1,260 +1,141 @@
-# 🔐 Auth Service - Dịch Vụ Định Danh & Quản Lý Truy Cập (IAM)
+# 🔐 Auth Service - Định danh và cấp JWT
 
-`auth-service` là microservice quản lý định danh người dùng và xác thực bảo mật (Identity & Access Management - IAM) trong hệ thống **Pet Clinic Management System**. Service này chịu trách nhiệm đăng ký tài khoản, mã hóa mật khẩu, xác thực thông tin đăng nhập, phát hành và kiểm tra tính hợp lệ của JSON Web Token (JWT) cho toàn bộ hệ thống.
-
----
-
-## 📌 Mục Lục
-1. [Tổng Quan Kiến Trúc & Công Nghệ](#-tổng-quan-kiến-trúc--công-nghệ)
-2. [Các Tính Năng & Nghiệp Vụ](#-các-tính-năng--nghiệp-vụ)
-   - [1. Đăng ký tài khoản (User Registration)](#1-đăng-ký-tài-khoản-user-registration)
-   - [2. Đăng nhập & Cấp phát JWT (Authentication & JWT Issuance)](#2-đăng-nhập--cấp-phát-jwt-authentication--jwt-issuance)
-   - [3. Xác minh tính hợp lệ của Token (Token Validation)](#3-xác-minh-tính-hợp-lệ-của-token-token-validation)
-   - [4. Phân quyền người dùng (Role-Based Access Control - RBAC)](#4-phân-quyền-người-dùng-role-based-access-control---rbac)
-3. [Luồng Nghiệp Vụ & Xác Thực (Sequence Diagram)](#-luồng-nghiệp-vụ--xác-thực-sequence-diagram)
-4. [Mô Hình Cơ Sở Dữ Liệu (Database Schema)](#-mô-hình-cơ-sở-dữ-liệu-database-schema)
-5. [Tài Liệu Chi Tiết REST API](#-tài-liệu-chi-tiết-rest-api)
-6. [Cấu Trúc Mã Nguồn](#-cấu-trúc-mã-nguồn)
-7. [Hướng Dẫn Cấu Hình & Khởi Chạy](#-hướng-dẫn-cấu-hình--khởi-chạy)
+`auth-service` quản lý tài khoản của hệ thống **Pet Clinic Management**: đăng ký khách hàng, đăng nhập, ký JWT, cho admin tạo tài khoản nhân viên và tự tạo admin đầu tiên từ biến môi trường. Service chỉ nhận request qua `api-gateway`; gateway verify JWT cho mọi service khác.
 
 ---
 
-## 🏛 Tổng Quan Kiến Trúc & Công Nghệ
-
-- **Ngôn ngữ & Runtime**: Java 17+, Spring Boot 3.x.
-- **Bảo mật**: **Spring Security 6**, mã hóa mật khẩu một chiều bằng thuật toán **BCrypt** (`PasswordEncoder`).
-- **Cơ chế Token**: **JJWT (Java JWT 0.11.5)** với thuật toán ký HMAC-SHA256.
-- **Cơ sở dữ liệu**: **PostgreSQL 15** (Database riêng biệt: `petclinic_auth`).
-- **ORM & Data Access**: Spring Data JPA / Hibernate với cấu hình tự động cập nhật schema (`ddl-auto: update`).
-- **Validation**: Jakarta Bean Validation (`@Valid`, `@NotBlank`, `@Size`).
-- **Port dịch vụ**: `8081` (Nội bộ) / Truy cập ngoại vi thông qua `api-gateway` (Port `8080`).
-
----
-
-## 🚀 Các Tính Năng & Nghiệp Vụ
-
-### 1. Đăng ký tài khoản (User Registration)
-- Tiếp nhận yêu cầu đăng ký gồm: `username`, `password`, `fullName` và `role`.
-- Kiểm tra tính duy nhất của `username` trong database: ngăn chặn trùng lặp tài khoản.
-- Mã hóa mật khẩu an toàn bằng `BCryptPasswordEncoder` (độ dài chuỗi băm 60 ký tự) trước khi lưu trữ vào bảng `users`.
-- Mặc định kích hoạt tài khoản ngay sau khi tạo (`enabled = true`).
-
-### 2. Đăng nhập & Cấp phát JWT (Authentication & JWT Issuance)
-- Tiếp nhận cặp thông tin xác thực `username` và `password`.
-- Đối soát mật khẩu đã băm bằng `passwordEncoder.matches(rawPassword, encodedPassword)`.
-- Kiểm tra trạng thái hoạt động của tài khoản (`enabled`).
-- Tạo và phát hành JWT Token với thời hạn sống mặc định là **24 giờ** (`86,400,000 ms`).
-- Cấu trúc Claims trong JWT Payload:
-  - `sub`: `username` (Mã định danh người dùng đăng nhập).
-  - `role`: Vai trò của người dùng (`ADMIN`, `VET`, `RECEPTIONIST`, `CUSTOMER`).
-  - `iat`: Epoch timestamp phát hành token.
-  - `exp`: Epoch timestamp hết hạn token.
-
-### 3. Xác minh tính hợp lệ của Token (Token Validation)
-- Cung cấp endpoint `/api/v1/auth/validate` cho các service nội bộ hoặc công cụ kiểm thử kiểm tra nhanh tính hợp lệ của token mà không cần giải mã thủ công.
-- Tự động kiểm tra chữ ký HMAC-SHA256 và thời gian hết hạn (`isTokenValid`).
-
-### 4. Phân quyền người dùng (Role-Based Access Control - RBAC)
-Hệ thống định nghĩa 4 vai trò quyền hạn cụ thể (`Role` enum):
-- `ADMIN`: Quản trị viên toàn quyền hệ thống phòng khám.
-- `VET`: Bác sĩ thú y (khám chữa bệnh, kê đơn, tiêm phòng).
-- `RECEPTIONIST`: Nhân viên lễ tân (tiếp đón, đặt lịch, check-in phòng, quản lý hóa đơn).
-- `CUSTOMER`: Khách hàng / chủ nuôi thú cưng (xem thông tin thú cưng, lịch sử khám).
+## 📌 Mục lục
+1. [Tổng quan](#-tổng-quan)
+2. [Nghiệp vụ](#-nghiệp-vụ)
+3. [Luồng đăng ký và đăng nhập](#-luồng-đăng-ký-và-đăng-nhập)
+4. [Database](#-database)
+5. [REST API](#-rest-api)
+6. [Cấu hình và chạy](#-cấu-hình-và-chạy)
+7. [Test](#-test)
 
 ---
 
-## 🔄 Luồng Nghiệp Vụ & Xác Thực (Sequence Diagram)
+## 🏛 Tổng quan
+
+| Hạng mục | Chi tiết |
+| :--- | :--- |
+| Runtime | Java 17, Spring Boot 3.3 |
+| Bảo mật | Spring Security 6 (stateless), mật khẩu băm bằng BCrypt |
+| Token | JJWT 0.12, HS256, hạn mặc định 24 giờ, claim `sub` = username, `userId`, `role` |
+| Database | PostgreSQL 15, database riêng `petclinic_auth`, JPA `ddl-auto: update` |
+| Cổng | `8081`, chỉ trong mạng Docker (dev: bind `127.0.0.1`); client gọi qua gateway `8080` |
+
+## 🚀 Nghiệp vụ
+
+### 1. Đăng ký khách hàng
+- `POST /api/v1/auth/register` nhận `username`, `password`, `fullName`. Request **không có trường `role`**: tài khoản tự đăng ký luôn là `CUSTOMER`. Bản cũ nhận `role` nên ai cũng tự đăng ký được thành `ADMIN`.
+- Username trùng → `409 Conflict`.
+
+### 2. Đăng nhập
+- Sai username hoặc sai mật khẩu đều trả cùng một `401` (không dò được username nào tồn tại). Tài khoản bị khóa → `403`.
+- Đúng → JWT HS256 chứa `sub` (username), `userId` (gateway chuyển thành `X-User-Id`), `role`, `iat`, `exp`.
+
+### 3. Tài khoản nhân viên
+- `POST /api/v1/auth/staff` tạo tài khoản `ADMIN`, `VET` hoặc `RECEPTIONIST`. Chỉ admin gọi được: service kiểm `X-User-Role` mà gateway đặt từ JWT đã verify (gateway luôn xóa bản client gửi). Người gọi không phải admin → `403`; role `CUSTOMER` → `400`.
+- Endpoint này tin header của gateway, nên an toàn chỉ khi auth-service không lộ cổng ra ngoài (compose prod không publish, dev chỉ `127.0.0.1`).
+
+### 4. Admin đầu tiên
+- Đặt `BOOTSTRAP_ADMIN_USERNAME` và `BOOTSTRAP_ADMIN_PASSWORD`: lúc khởi động `AdminBootstrap` tạo admin nếu username đó chưa tồn tại. Chạy lại bao nhiêu lần cũng chỉ một admin.
+- Để trống một trong hai thì không tạo gì. Khi đó không ai tạo được nhân viên, nên mọi endpoint chỉ dành cho nhân viên ở pet-service đều không dùng được.
+
+### 5. Vai trò (`Role`)
+`ADMIN`, `VET`, `RECEPTIONIST`, `CUSTOMER`. Quyền theo vai trò và theo quyền sở hữu dữ liệu được áp ở `pet-service` (xem mục *Authorization* trong [README gốc](../README.md#authorization)).
+
+## 🔄 Luồng đăng ký và đăng nhập
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Client as Người Dùng / Client
-    participant GW as API Gateway (8080)
-    participant AuthCtrl as AuthController (8081)
-    participant AuthSvc as AuthService
-    participant Repo as UserRepository
+    actor C as Client
+    participant GW as api-gateway :8080
+    participant A as auth-service :8081
     participant DB as PostgreSQL (petclinic_auth)
-    participant JWT as JwtService
 
-    %% Luồng Đăng Ký
-    Note over Client, DB: Giai đoạn 1: Đăng ký tài khoản (Sign Up)
-    Client->>GW: POST /api/v1/auth/register (username, password, fullName, role)
-    GW->>AuthCtrl: Forward request
-    AuthCtrl->>AuthSvc: register(request)
-    AuthSvc->>Repo: existsByUsername(username)
-    Repo->>DB: SELECT COUNT(*) FROM users WHERE username = ?
-    DB-->>Repo: 0
-    AuthSvc->>AuthSvc: BCrypt.hash(password)
-    AuthSvc->>Repo: save(User)
-    Repo->>DB: INSERT INTO users (...)
-    AuthSvc-->>AuthCtrl: Thành công
-    AuthCtrl-->>Client: 200 OK ("User registered successfully")
+    C->>GW: POST /api/v1/auth/register {username, password, fullName}
+    Note over GW: đường public: xóa X-User-*, không cần JWT
+    GW->>A: forward
+    A->>DB: username đã có? (có → 409)
+    A->>DB: INSERT users (BCrypt, role = CUSTOMER)
+    A-->>C: 200 "User registered successfully"
 
-    %% Luồng Đăng Nhập
-    Note over Client, DB: Giai đoạn 2: Đăng nhập & Nhận JWT
-    Client->>GW: POST /api/v1/auth/login (username, password)
-    GW->>AuthCtrl: Forward request
-    AuthCtrl->>AuthSvc: login(request)
-    AuthSvc->>Repo: findByUsername(username)
-    Repo->>DB: SELECT * FROM users WHERE username = ?
-    DB-->>Repo: User Record
-    AuthSvc->>AuthSvc: BCrypt.matches(password, user.password)
-    AuthSvc->>JWT: generateToken(username, role)
-    JWT-->>AuthSvc: Signed JWT String
-    AuthSvc-->>AuthCtrl: AuthResponse (token, type="Bearer", role, expiresIn)
-    AuthCtrl-->>Client: 200 OK + JSON Token
+    C->>GW: POST /api/v1/auth/login {username, password}
+    GW->>A: forward
+    A->>DB: SELECT user theo username
+    A->>A: BCrypt.matches (sai → 401)
+    A-->>C: 200 {token, type: "Bearer", expiresIn, username, role}
 ```
 
----
+## 🗄 Database
 
-## 🗄 Mô Hình Cơ Sở Dữ Liệu (Database Schema)
+Bảng `users` (database `petclinic_auth`):
 
-Cơ sở dữ liệu: `petclinic_auth` trên PostgreSQL.
-
-### Bảng `users`
-| Tên Cột | Kiểu Dữ Liệu | Ràng Buộc | Ý Nghĩa Nghiệp Vụ |
-| :--- | :--- | :--- | :--- |
-| `id` | `BIGINT` | PRIMARY KEY, GENERATED ALWAYS AS IDENTITY | Mã định danh duy nhất của người dùng |
-| `username` | `VARCHAR(255)` | NOT NULL, UNIQUE | Tên đăng nhập duy nhất của tài khoản |
-| `password` | `VARCHAR(255)` | NOT NULL | Mật khẩu đã được mã hóa bằng BCrypt (độ dài 60 ký tự) |
-| `full_name` | `VARCHAR(255)` | NULLABLE | Họ và tên đầy đủ của người dùng |
-| `role` | `VARCHAR(50)` | NOT NULL | Vai trò: `ADMIN`, `VET`, `RECEPTIONIST`, `CUSTOMER` |
-| `enabled` | `BOOLEAN` | NOT NULL, DEFAULT `true` | Trạng thái kích hoạt tài khoản |
-
----
-
-## 📡 Tài Liệu Chi Tiết REST API
-
-Prefix chung: `/api/v1/auth`
-
-### 1. Đăng ký tài khoản (`POST /api/v1/auth/register`)
-- **Mô tả**: Tạo mới người dùng trong hệ sinh thái phòng khám.
-- **Quyền truy cập**: Public (Không cần token).
-- **Request Body**:
-  ```json
-  {
-    "username": "dr_alex",
-    "password": "SecurePassword123!",
-    "fullName": "Bác Sĩ Alex Trần",
-    "role": "VET"
-  }
-  ```
-  *(Các role hợp lệ: `ADMIN`, `VET`, `RECEPTIONIST`, `CUSTOMER`)*
-- **Response**:
-  - `200 OK`: `"User registered successfully"`
-  - `400 Bad Request`: Thiếu dữ liệu hợp lệ (`@NotBlank`, `@Size`).
-  - `500 / RuntimeException`: `"Username already exists"` khi username bị trùng lặp.
-
-### 2. Đăng nhập hệ thống (`POST /api/v1/auth/login`)
-- **Mô tả**: Xác thực tài khoản và phát hành JWT Token.
-- **Quyền truy cập**: Public (Không cần token).
-- **Request Body**:
-  ```json
-  {
-    "username": "dr_alex",
-    "password": "SecurePassword123!"
-  }
-  ```
-- **Response**:
-  - `200 OK`:
-    ```json
-    {
-      "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkcl9hbGV4Iiwicm9sZSI6IlZFVCIsImlhdCI6MTcyOTI1NTIwMCwiZXhwIjoxNzI5MzQxNjAwfQ...",
-      "type": "Bearer",
-      "expiresIn": 86400000,
-      "username": "dr_alex",
-      "role": "VET"
-    }
-    ```
-  - `500 / RuntimeException`: `"Invalid username or password"` hoặc `"User account is disabled"`.
-
-### 3. Kiểm tra tính hợp lệ Token (`GET /api/v1/auth/validate`)
-- **Mô tả**: Kiểm tra xem token có còn hợp lệ và đúng chữ ký không.
-- **Headers**:
-  - `Authorization: Bearer <JWT_TOKEN>`
-- **Response**:
-  - `200 OK`: `"Token is valid"`
-  - `401 Unauthorized`: `"Invalid or missing token"`
-
----
-
-## 📂 Cấu Trúc Mã Nguồn
-
-```
-auth-service/
-├── pom.xml                                   # Quản lý dependencies (Spring Security, JPA, JJWT, Postgres)
-├── Dockerfile                                # Docker containerfile cho auth-service
-└── src/main/
-    ├── java/com/petclinic/authservice/
-    │   ├── AuthServiceApplication.java       # Main class khởi chạy Spring Boot
-    │   ├── controller/
-    │   │   └── AuthController.java           # Endpoint REST API (/register, /login, /validate)
-    │   ├── dto/
-    │   │   ├── AuthResponse.java             # Payload trả về khi đăng nhập thành công
-    │   │   ├── LoginRequest.java             # Payload gửi lên khi đăng nhập
-    │   │   └── RegisterRequest.java          # Payload gửi lên khi đăng ký tài khoản
-    │   ├── entity/
-    │   │   ├── Role.java                     # Enum quyền hạn (ADMIN, VET, RECEPTIONIST, CUSTOMER)
-    │   │   └── User.java                     # JPA Entity ánh xạ bảng `users`
-    │   ├── repository/
-    │   │   └── UserRepository.java           # Spring Data JPA Repository thao tác bảng users
-    │   ├── security/
-    │   │   ├── JwtService.java               # Xử lý sinh và giải mã JSON Web Token (HMAC-SHA256)
-    │   │   └── SecurityConfig.java           # Cấu hình Spring Security Filter Chain & BCrypt
-    │   └── service/
-    │       └── AuthService.java              # Nghiệp vụ đăng ký, kiểm tra mật khẩu & cấp token
-    └── resources/
-        └── application.yml                   # Cấu hình CSDL, JWT Secret & Expiration
-```
-
----
-
-## 🛠 Hướng Dẫn Cấu Hình & Khởi Chạy
-
-### 1. Yêu Cầu Môi Trường
-- **JDK 17** trở lên.
-- **PostgreSQL 15** (đang chạy và đã tạo database `petclinic_auth`).
-
-### 2. Các Biến Môi Trường Cấu Hình Chính
-| Tên Thuộc Tính / Biến Môi Trường | Mặc Định (Dev) | Ý Nghĩa |
+| Cột | Kiểu | Ràng buộc |
 | :--- | :--- | :--- |
-| `server.port` | `8081` | Cổng HTTP lắng nghe của Auth Service |
-| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5432/petclinic_auth` | Chuỗi kết nối JDBC tới PostgreSQL |
-| `SPRING_DATASOURCE_USERNAME` | `petclinic_user` | Tài khoản đăng nhập CSDL |
-| `SPRING_DATASOURCE_PASSWORD` | `petclinic_password` | Mật khẩu đăng nhập CSDL |
-| `jwt.secret` | `404E6352...` (256-bit Hex) | Khóa bí mật dùng để ký và giải mã JWT |
-| `jwt.expiration-ms` | `86400000` (24 giờ) | Thời gian sống của token tính theo mili-giây |
+| `id` | `BIGINT` | khóa chính, tự tăng |
+| `username` | `VARCHAR(255)` | `NOT NULL`, `UNIQUE` |
+| `password` | `VARCHAR(255)` | `NOT NULL`, chuỗi BCrypt |
+| `full_name` | `VARCHAR(255)` | `NOT NULL` |
+| `role` | `VARCHAR(50)` | `NOT NULL`: `ADMIN`, `VET`, `RECEPTIONIST`, `CUSTOMER` |
+| `enabled` | `BOOLEAN` | `NOT NULL`, mặc định `true` |
+| `created_at` | `TIMESTAMP` | `NOT NULL`, đặt lúc tạo |
 
-### 3. Chạy Độc Lập Cho Local Development
-1. Đảm bảo PostgreSQL đã chạy:
-   ```bash
-   docker compose up -d postgres-db
-   ```
-2. Chạy ứng dụng bằng Maven:
-   ```bash
-   cd auth-service
-   mvn spring-boot:run
-   ```
+## 📡 REST API
 
-### 4. Kiểm Thử Nhanh Bằng cURL
-- Đăng ký:
-  ```bash
-  curl -X POST http://localhost:8081/api/v1/auth/register \
-    -H "Content-Type: application/json" \
-    -d '{
-      "username": "admin",
-      "password": "password123",
-      "fullName": "Quản Trị Viên",
-      "role": "ADMIN"
-    }'
-  ```
+Prefix `/api/v1/auth`. Gateway chỉ mở `register` và `login`; mọi đường khác cần `Authorization: Bearer <jwt>`.
 
-- Đăng nhập:
-  ```bash
-  curl -X POST http://localhost:8081/api/v1/auth/login \
-    -H "Content-Type: application/json" \
-    -d '{
-      "username": "admin",
-      "password": "password123"
-    }'
-  ```
+| Method | Đường dẫn | Quyền | Kết quả |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/register` | public | `200`; `400` thiếu trường; `409` trùng username |
+| `POST` | `/login` | public | `200` kèm token; `401` sai thông tin; `403` tài khoản bị khóa |
+| `POST` | `/staff` | ADMIN | `201`; `400` nếu role là `CUSTOMER`; `403` nếu không phải admin; `409` trùng username |
+| `GET` | `/validate` | có JWT | `200 "Token is valid"` hoặc `401` |
+
+Ví dụ phản hồi `login`:
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiJ9...",
+  "type": "Bearer",
+  "expiresIn": 86400000,
+  "username": "alice",
+  "role": "CUSTOMER"
+}
+```
+
+## 🛠 Cấu hình và chạy
+
+| Biến môi trường | Mặc định | Ý nghĩa |
+| :--- | :--- | :--- |
+| `JWT_SECRET` | **không có, bắt buộc** | Base64 của ít nhất 32 byte ngẫu nhiên (`openssl rand -base64 32`), giống hệt giá trị của gateway. Thiếu, không phải base64 hoặc ngắn hơn 256 bit thì service dừng ngay lúc khởi động |
+| `JWT_EXPIRATION_MS` | `86400000` (24 giờ) | Thời hạn token |
+| `BOOTSTRAP_ADMIN_USERNAME`, `BOOTSTRAP_ADMIN_PASSWORD` | trống | Admin đầu tiên (xem trên) |
+| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5432/petclinic_auth` | |
+| `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD` | `petclinic_user` / `petclinic_password` | |
+
+Cả hệ thống chạy bằng `docker compose up --build` ở thư mục gốc (xem [README gốc](../README.md#getting-started)). Chạy riêng service này:
+
+```bash
+docker compose up -d postgres-db
+cd auth-service
+JWT_SECRET=$(openssl rand -base64 32) BOOTSTRAP_ADMIN_USERNAME=admin BOOTSTRAP_ADMIN_PASSWORD=change-me mvn spring-boot:run
+```
+
+Thử nhanh qua gateway (cổng `8080`; `/staff` cần header `X-User-Role` do gateway đặt nên phải đi qua gateway):
+
+```bash
+curl -s -X POST localhost:8080/api/v1/auth/register -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"secret123","fullName":"Alice"}'
+ADMIN=$(curl -s -X POST localhost:8080/api/v1/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"change-me"}' | sed 's/.*"token":"\([^"]*\)".*/\1/')
+curl -s -X POST localhost:8080/api/v1/auth/staff -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d '{"username":"vet1","password":"secret123","fullName":"Dr. Vet","role":"VET"}'
+```
+
+## ✅ Test
+
+`mvn test`: 8 test của `AuthService` (Mockito). Kiểm tra: tự đăng ký luôn là `CUSTOMER`; chỉ admin tạo được nhân viên và không tạo được `CUSTOMER` qua `/staff`; admin khởi tạo idempotent; sai thông tin trả `401`, trùng username trả `409` (không phải `500`); token chứa `userId`.

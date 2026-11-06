@@ -38,18 +38,19 @@
 ## 🚀 Các Tính Năng & Phân Hệ Nghiệp Vụ
 
 ### 1. Quản lý Chủ sở hữu (Owner Management)
-- **Tạo mới hồ sơ khách hàng**: Đăng ký thông tin chủ thú cưng gồm tên, số điện thoại (ràng buộc duy nhất), email và địa chỉ.
-- **Tự động liên kết tài khoản Billing**: Khi tạo mới chủ nuôi thành công, hệ thống tự động phát lời gọi gRPC `CreateBillingAccount` sang `billing-service` để tạo tài khoản thanh toán / ví trả sau.
+- **Tạo mới hồ sơ khách hàng**: Đăng ký thông tin chủ thú cưng gồm tên, số điện thoại (ràng buộc duy nhất), email và địa chỉ. Khách tự tạo thì hồ sơ được gắn với tài khoản của họ (`owners.user_id`, mỗi tài khoản một hồ sơ); nhân viên tạo hộ khách vãng lai và có thể gắn tài khoản.
+- **Tạo tài khoản Billing qua outbox**: Cùng transaction với chủ nuôi, service ghi một dòng `outbox_events` loại `BILLING_ACCOUNT_REQUESTED`. Sau khi commit, `OutboxRelay` gọi gRPC `CreateBillingAccount` sang `billing-service`; client nhận `201` ngay, không chờ billing.
 - **Tìm kiếm & Tra cứu**:
-  - Tìm kiếm theo số điện thoại có hỗ trợ phân trang (`Pageable`).
-  - Lấy chi tiết thông tin chủ sở hữu theo `ownerId`.
+  - `GET /owners/me`: hồ sơ của khách đang đăng nhập.
+  - Tìm kiếm theo số điện thoại có phân trang (`Pageable`), chỉ nhân viên.
+  - Lấy chi tiết chủ nuôi theo `ownerId` (khách chỉ xem được hồ sơ của mình).
 
 ### 2. Quản lý Thú cưng (Pet Management)
 - **Đăng ký hồ sơ thú cưng**: Khởi tạo thông tin thú cưng liên kết trực tiếp với chủ nuôi (`ownerId`):
   - Chủng loại (`Species`): `DOG`, `CAT`, `OTHER`.
   - Giới tính (`Gender`): `MALE`, `FEMALE`, `UNKNOWN`.
   - Giống loài (`breed`), ngày sinh (`dateOfBirth`), trạng thái triệt sản (`isNeutered`), cân nặng (`weight`), tiền sử dị ứng (`allergies`) và ghi chú đặc biệt.
-- **Phát sự kiện Kafka (Event Publishing)**: Sau khi tạo mới thành công, service publish sự kiện `PET_CREATED` tuần tự hóa bằng Protobuf vào Kafka topic `pet-events` (Message key = `petId` để đảm bảo thứ tự xử lý).
+- **Phát sự kiện Kafka qua outbox**: Cùng transaction với thú cưng, service ghi sự kiện `PET_CREATED` (Protobuf, `event_id` sinh một lần) vào `outbox_events`; `OutboxRelay` gửi lên topic `pet-events` sau khi commit (message key = `petId` để giữ thứ tự theo từng thú cưng).
 - **Cập nhật nhanh thông tin y tế**: Cho phép cập nhật linh hoạt cân nặng định kỳ và thông tin dị ứng mới phát hiện.
 - **Truy vấn thú cưng theo chủ**: Liệt kê danh sách tất cả thú cưng của một chủ nuôi cụ thể.
 
@@ -114,14 +115,16 @@
 ```
 
 ### 🔹 gRPC Client -> Billing Service
-- Giao tiếp đồng bộ hiệu năng cao thông qua contract `billing_service.proto` trong `proto-common`.
-- Khi một chủ nuôi mới được tạo, `BillingClientService` kích hoạt `createBillingAccount`:
+- Contract `billing_service.proto` trong `proto-common`.
+- Không gọi trong request của người dùng: `OutboxRelay` (`@Scheduled` mỗi 1 giây) lấy các dòng `outbox_events` chưa xử lý bằng `SELECT ... FOR UPDATE SKIP LOCKED` (an toàn khi chạy nhiều instance) rồi gọi `BillingClientService.createBillingAccount`:
   - Target: `static://billing-service:9090` (môi trường container) hoặc cấu hình qua `GRPC_CLIENT_BILLING-SERVICE_ADDRESS`.
-  - **Khả năng chịu lỗi (Fault Resilience)**: Nếu `billing-service` tạm thời mất kết nối, hệ thống ghi log cảnh báo (`log.warn`) và không làm rollback giao dịch tạo chủ sở hữu, đảm bảo trải nghiệm người dùng không bị gián đoạn.
+  - Deadline 5 giây: billing treo không giữ thread mãi.
+  - **Khi billing lỗi**: dòng outbox giữ nguyên, `attempts++`, lưu `last_error`, thử lại với exponential backoff (2 giây, 4 giây, 8 giây… tối đa 5 phút); sau 10 lần thì dừng để người vận hành xem. Chủ nuôi đã được tạo từ trước nên người dùng không bị ảnh hưởng.
+  - Giao ít nhất một lần, nên `billing-service` idempotent theo `customer_id`.
 
 ### 🔹 Kafka Event Publisher -> Analytics Service
-- Cấu hình Producer qua `KafkaProducerConfig` và `PetEventPublisher`.
-- Sự kiện được gửi bất đồng bộ (`CompletableFuture`) với độ tin cậy cao (`acks: all`, `retries: 3`).
+- Cấu hình Producer qua `KafkaProducerConfig` (topic `pet-events` 3 partition) và `PetEventPublisher`.
+- `OutboxRelay` gửi sự kiện và chờ broker xác nhận (`acks: all`, tối đa 10 giây) rồi mới đánh dấu dòng outbox đã xử lý; lỗi thì thử lại theo backoff như trên.
 - **Protobuf Event Payload (`PetEvent`)**:
   - `eventId`: UUID duy nhất để hỗ trợ kiểm tra tính idempotent phía Consumer.
   - `eventType`: `"PET_CREATED"`.
@@ -141,7 +144,7 @@
 
 ### 🔹 Chống double-booking
 - Check-in chuồng khoá dòng `cages` bằng `SELECT ... FOR UPDATE` trong suốt lúc kiểm tra và đổi trạng thái.
-- Migration V4 thêm partial unique index: mỗi chuồng tối đa 1 lượt lưu `ACTIVE`, mỗi pet tối đa 1 chuồng `ACTIVE`.
+- Migration V4 thêm partial unique index: mỗi chuồng tối đa 1 lượt lưu `ACTIVE`, mỗi pet tối đa 1 chuồng `ACTIVE`. Trước khi tạo index, V4 đóng các lượt `ACTIVE` trùng mà code cũ để lại (giữ lượt mới nhất của mỗi pet và mỗi chuồng, trả chuồng trống về `AVAILABLE`); không có bước này, một dòng trùng làm Flyway fail và service không khởi động được.
 - Đặt lịch hẹn khoá dòng `pets`, từ chối lịch hẹn thứ hai còn hiệu lực trong vòng 30 phút.
 - Trạng thái lịch hẹn và vé spa là state machine; chuyển trạng thái sai → `409`.
 
@@ -149,16 +152,24 @@
 
 ## 🗄 Mô Hình Cơ Sở Dữ Liệu (Database Schema)
 
-PostgreSQL schema được quản lý tự động bởi Flyway (`db/migration/V1__init_schema.sql`):
+PostgreSQL schema do Flyway quản lý (`ddl-auto: validate` kiểm entity khớp schema lúc khởi động):
+
+| Migration | Nội dung |
+| :--- | :--- |
+| `V1__init_schema.sql` | Các bảng nghiệp vụ bên dưới |
+| `V2__seed_sample_data.sql` | Dữ liệu mẫu: 3 chủ nuôi, 5 thú cưng, 5 chuồng, lịch hẹn và vé spa |
+| `V3__create_outbox_events.sql` | Bảng `outbox_events` cho Transactional Outbox |
+| `V4__ownership_and_booking_constraints.sql` | `owners.user_id` (UNIQUE), dọn lượt lưu trú trùng, partial unique index cho `boarding_tickets` |
 
 | Tên Bảng | Ý Nghĩa Nghiệp Vụ | Ràng Buộc / Indexes Chính |
 | :--- | :--- | :--- |
-| `owners` | Danh sách chủ sở hữu thú cưng | `phone_number` UNIQUE, Indexes: `idx_owner_phone`, `idx_owner_email` |
+| `owners` | Danh sách chủ sở hữu thú cưng | `phone_number` UNIQUE, `user_id` UNIQUE (tài khoản auth-service; NULL với khách vãng lai), Indexes: `idx_owner_phone`, `idx_owner_email` |
 | `pets` | Danh sách thú cưng | FK `owner_id` -> `owners(id)` ON DELETE CASCADE, Indexes: `idx_pet_name`, `idx_pet_owner_id` |
 | `medical_records` | Bệnh án khám chữa bệnh | FK `pet_id` -> `pets(id)` ON DELETE CASCADE, Index: `idx_medical_record_pet_id` |
 | `vaccinations` | Lịch sử & mũi tiêm phòng | FK `pet_id` -> `pets(id)` ON DELETE CASCADE, Index: `idx_vaccination_pet_id` |
 | `cages` | Danh mục phòng/chuồng lưu trú | `code` UNIQUE, Index: `idx_cage_code` |
-| `boarding_tickets` | Vé lưu chuồng khách sạn | FK `pet_id` -> `pets(id)`, FK `cage_id` -> `cages(id)` ON DELETE RESTRICT |
+| `boarding_tickets` | Vé lưu chuồng khách sạn | FK `pet_id` -> `pets(id)`, FK `cage_id` -> `cages(id)` ON DELETE RESTRICT; partial unique `(cage_id)` và `(pet_id)` `WHERE status = 'ACTIVE'` |
+| `outbox_events` | Việc cần giao sau commit (gRPC billing, Kafka) | `processed_at`, `attempts`, `next_attempt_at`, `last_error`; relay lấy bằng `FOR UPDATE SKIP LOCKED` |
 | `spa_tickets` | Vé dịch vụ spa làm đẹp | Cột `services` kiểu `JSONB`, FK `pet_id` -> `pets(id)` |
 | `appointments` | Lịch hẹn dịch vụ | FK `pet_id` -> `pets(id)`, Indexes: `idx_appointment_pet_id`, `idx_appointment_date` |
 
@@ -168,14 +179,15 @@ PostgreSQL schema được quản lý tự động bởi Flyway (`db/migration/V
 
 ## 📡 Tài Liệu Chi Tiết REST API
 
-Prefix chung: `/api/v1`
+Prefix chung: `/api/v1`. Mọi request phải đi qua gateway (header `X-User-*`); thiếu header → `401`, sai role hoặc dữ liệu của người khác → `403`. Quyền từng endpoint: xem mục *Authorization* trong [README gốc](../README.md#authorization).
 
 ### 1. Owners API (`/api/v1/owners`)
 | Method | Endpoint | Mô Tả | Request Body / Query Params |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/api/v1/owners` | Đăng ký chủ nuôi mới | Body JSON: `fullName`, `phoneNumber`, `email`, `address` |
+| `POST` | `/api/v1/owners` | Đăng ký chủ nuôi mới (khách: hồ sơ của chính mình) | Body JSON: `fullName`, `phoneNumber`, `email`, `address`; nhân viên có thể gửi thêm `userId` |
+| `GET` | `/api/v1/owners/me` | Hồ sơ của khách đang đăng nhập | — |
 | `GET` | `/api/v1/owners/{id}` | Lấy chi tiết chủ nuôi | Path param: `id` |
-| `GET` | `/api/v1/owners` | Tìm kiếm theo số điện thoại (phân trang) | Query param: `phone`, `page`, `size`, `sort` |
+| `GET` | `/api/v1/owners` | Tìm kiếm theo số điện thoại (phân trang, chỉ nhân viên) | Query param: `phone`, `page`, `size`, `sort` |
 
 ### 2. Pets API (`/api/v1/pets`)
 | Method | Endpoint | Mô Tả | Request Body / Query Params |
@@ -226,8 +238,10 @@ Tất cả các ngoại lệ nghiệp vụ và lỗi hệ thống được chu�
 ```
 
 - `400 Bad Request`: Thiếu tham số bắt buộc hoặc vi phạm Hibernate Bean Validation. Trường `validationErrors` sẽ chứa chi tiết từng thuộc tính không hợp lệ.
+- `401 Unauthorized`: Request không có header danh tính của gateway (gọi thẳng vào service, id không phải số, role lạ).
+- `403 Forbidden`: Sai role cho endpoint, hoặc khách truy cập owner, pet, lịch hẹn của người khác.
 - `404 Not Found`: Khi không tìm thấy ID của thú cưng, chủ nuôi, chuồng hoặc phiếu dịch vụ (`ResourceNotFoundException`).
-- `409 Conflict`: Vi phạm ràng buộc dữ liệu trùng lặp (`DuplicateResourceException` - trùng SĐT chủ nuôi) hoặc xung đột nghiệp vụ (`CageUnavailableException` - chuồng đã có thú cưng).
+- `409 Conflict`: Trùng dữ liệu (`DuplicateResourceException`: trùng SĐT chủ nuôi, tài khoản đã có hồ sơ), xung đột nghiệp vụ (`CageUnavailableException`: chuồng đã có thú cưng; pet đang lưu trú; lịch hẹn trong vòng 30 phút) hoặc chuyển trạng thái sai.
 
 ---
 
@@ -247,7 +261,8 @@ Tất cả các ngoại lệ nghiệp vụ và lỗi hệ thống được chu�
 | `DB_USERNAME` | `postgres` / `petclinic_user` | Tài khoản đăng nhập CSDL |
 | `DB_PASSWORD` | `password` / `petclinic_password` | Mật khẩu CSDL |
 | `GRPC_CLIENT_BILLING-SERVICE_ADDRESS` | `static://localhost:9090` | Địa chỉ gRPC server của Billing Service |
-| `SPRING_KAFKA_PRODUCER_BOOTSTRAP-SERVERS` | `localhost:9092` | Địa chỉ Kafka Broker (`kafka:9092` trên Docker) |
+| `SPRING_KAFKA_PRODUCER_BOOTSTRAP-SERVERS` | `localhost:9092` | Địa chỉ Kafka Broker cho producer (`kafka:9092` trên Docker) |
+| `SPRING_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Cho Kafka admin client, tạo topic `pet-events` 3 partition lúc khởi động. Thiếu biến này trong Docker thì admin gọi `localhost`, chờ khoảng 30 giây và topic bị producer tự tạo với 1 partition |
 
 ### 3. Chạy Bằng Docker Compose (Toàn Bộ Hệ Thống)
 Tại thư mục gốc của repository:

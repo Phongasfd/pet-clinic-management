@@ -42,7 +42,7 @@ flowchart TB
     pet -.->|"OutboxRelay · Protobuf · acks=all"| kafka{{"Kafka (KRaft)<br/>pet-events · 3 partitions<br/>+ pet-events.DLT"}}
     kafka -.->|"consume · dedupe event_id"| an
     auth --- dba[(petclinic_auth)]
-    pet --- dbp[(pet_clinic_pets<br/>Flyway V1-V3)]
+    pet --- dbp[(pet_clinic_pets<br/>Flyway V1-V4)]
     bill --- dbb[(pet_clinic_billing)]
     an --- dbn[(pet_clinic_analytics)]
 ```
@@ -52,7 +52,7 @@ Dashed arrows are asynchronous to the user's request: they start from the outbox
 | Service | Responsibility |
 | --- | --- |
 | [`api-gateway`](api-gateway) | Routing, CORS, JWT verification, identity-header injection |
-| [`auth-service`](auth-service) | Registration (`CUSTOMER` only), login, HS256 JWT with `userId` and `role` |
+| [`auth-service`](auth-service) | Registration (`CUSTOMER` only), login, HS256 JWT with `userId` and `role`; admins create staff accounts, the first admin comes from the environment |
 | [`pet-service`](pet-service) | Owners, pets, medical records, vaccinations, appointments, boarding (cages), spa; outbox + relay |
 | [`billing-service`](billing-service) | Billing accounts over gRPC, idempotent |
 | [`analytics-service`](analytics-service) | Pet counts per species from `pet-events`, idempotent consumer, DLT |
@@ -93,7 +93,7 @@ Adding a pet works the same way, except the relay publishes a `PetEvent`. It is 
 | Sync RPC | gRPC (`grpc-spring-boot-starter`), Protobuf 3 |
 | Async | Apache Kafka 7.6 in KRaft mode, Spring Kafka, Dead Letter Topic |
 | Data | PostgreSQL 15 (one DB per service), Flyway (pet-service), JPA auditing |
-| Testing | JUnit 5, Mockito, Spring `MockServerWebExchange`, `contextLoads` on PostgreSQL in CI |
+| Testing | JUnit 5, Mockito; pet-service integration tests on embedded PostgreSQL (zonky) and an in-JVM Kafka broker (no Docker); Spring `MockServerWebExchange` for the gateway |
 | Delivery | Docker, Docker Compose (dev and prod), one GitHub Actions workflow per service (path-filtered) |
 
 ## Design decisions and trade-offs
@@ -116,6 +116,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
+`JWT_SECRET` must be base64 of at least 32 bytes: auth-service and the gateway refuse to start otherwise, instead of failing every login later. Without `BOOTSTRAP_ADMIN_PASSWORD` no admin is created, so nobody can create staff accounts.
+
 The gateway listens on `http://localhost:8080`. Try the main flow:
 
 ```bash
@@ -133,7 +135,12 @@ OWNER_ID=$(curl -s -X POST localhost:8080/api/v1/owners -H "Authorization: Beare
   -d '{"fullName":"Nguyen Van A","phoneNumber":"0900000000","email":"a@example.com"}' | sed 's/.*"id":\([0-9]*\).*/\1/')
 curl -s -X POST localhost:8080/api/v1/pets -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d "{\"name\":\"Milu\",\"species\":\"DOG\",\"ownerId\":$OWNER_ID}"
-curl -s localhost:8080/api/v1/pets/owner/1 -H "Authorization: Bearer $TOKEN"   # 403: owner 1 is someone else
+curl -s localhost:8080/api/v1/pets/owner/$OWNER_ID -H "Authorization: Bearer $TOKEN"   # her pets
+
+# another customer can't read them (403)
+curl -s -X POST localhost:8080/api/v1/auth/register -H 'Content-Type: application/json' \
+  -d '{"username":"bob","password":"secret123","fullName":"Bob"}'
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/api/v1/pets/owner/$OWNER_ID -H "Authorization: Bearer $(login bob secret123)"
 
 # 3. a second later, analytics has counted it
 curl -s localhost:8080/api/v1/analytics/summary -H "Authorization: Bearer $TOKEN"
@@ -144,7 +151,7 @@ curl -s -X POST localhost:8080/api/v1/auth/staff -H "Authorization: Bearer $ADMI
   -d '{"username":"vet1","password":"secret123","fullName":"Dr. Vet","role":"VET"}'
 ```
 
-> Upgrading an existing Postgres volume? `postgres-init.sql` only runs on a fresh volume, so create the analytics DB once: `CREATE DATABASE pet_clinic_analytics;`. Owners created before migration V4 have no `user_id`, so only staff can see them until one is linked.
+> Upgrading an existing Postgres volume? `postgres-init.sql` only runs on a fresh volume, so create the analytics DB once: `CREATE DATABASE pet_clinic_analytics;`. Migration V4 closes duplicate active boarding stays the old code allowed (it keeps the newest per pet and per cage) before adding its unique indexes; without that, pet-service would fail to start on such data. Owners created before V4 have no `user_id`, so only staff can see them until one is linked.
 
 ## Authorization
 
@@ -173,7 +180,7 @@ for s in api-gateway auth-service billing-service analytics-service; do (cd $s &
 (cd pet-service && ./mvnw verify)                        # no Docker or local Postgres needed
 ```
 
-pet-service's integration tests start a real PostgreSQL (zonky embedded binaries) and an in-JVM Kafka broker, so row locks, partial unique indexes and the outbox relay run as in production, and Flyway V1-V4 are checked against the entities (`ddl-auto: validate`). pet-service has 60 tests (14 of them integration); auth-service has 8.
+pet-service's integration tests start a real PostgreSQL (zonky embedded binaries) and an in-JVM Kafka broker, so row locks, partial unique indexes and the outbox relay run as in production, and Flyway V1-V4 are checked against the entities (`ddl-auto: validate`). An upgrade test migrates a database written by the previous release, with duplicate active stays, to V4. pet-service has 61 tests (15 of them on PostgreSQL); auth-service has 8, api-gateway 5, billing-service 4, analytics-service 2.
 
 | Service | What is covered |
 | --- | --- |

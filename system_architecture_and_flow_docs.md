@@ -67,12 +67,12 @@ flowchart TB
 
 | Component | Port(s) | Technology Stack | Database / Storage | Key Responsibilities |
 |---|---|---|---|---|
-| [**api-gateway**](file:///d:/pet-clinic-management/api-gateway) | `8080` (HTTP) | Spring Cloud Gateway (Reactive WebFlux), Java 17, JJWT | None | Single entry point, CORS management, JWT signature validation, header injection (`X-User-*`), request routing |
-| [**auth-service**](file:///d:/pet-clinic-management/auth-service) | `8081` (HTTP) | Spring Boot 3, Spring Security, Spring Data JPA, PostgreSQL Driver | `petclinic_auth` (PostgreSQL) | User registration, credential verification, BCrypt hashing, JWT generation (`24h` expiration) |
-| [**pet-service**](file:///d:/pet-clinic-management/pet-service) | `8082` (HTTP) | Spring Boot, Spring Data JPA, Flyway, `grpc-client-spring-boot-starter`, `spring-kafka` | `pet_clinic_pets` (PostgreSQL) | Clinic business logic: Pet, Owner, Appointment, Boarding, MedicalRecord, Spa. Calls Billing over gRPC, publishes Kafka events |
-| [**billing-service**](file:///d:/pet-clinic-management/billing-service) | `8083` (HTTP)<br/>`9090` (gRPC) | Spring Boot, `grpc-server-spring-boot-starter`, Spring Data JPA | `pet_clinic_billing` (PostgreSQL) | Customer billing accounts, ledger balances, gRPC RPC implementation for instant account provisioning |
-| [**analytics-service**](file:///d:/pet-clinic-management/analytics-service) | `8084` (HTTP) | Spring Boot, `spring-kafka`, Spring Data JPA, PostgreSQL | `pet_clinic_analytics` (PostgreSQL) | Consumes Protobuf messages from Kafka, aggregates clinic metrics (e.g. pet counts per species), idempotent on `event_id` (`processed_events`), DLT error handling |
-| [**proto-common**](file:///d:/pet-clinic-management/proto-common) | N/A (Shared Lib) | Protobuf 3 compiler, `protobuf-java`, `grpc-protobuf`, `grpc-stub` | N/A | Language-neutral binary message and gRPC service contracts compiled to Java |
+| [**api-gateway**](api-gateway) | `8080` (HTTP) | Spring Cloud Gateway (Reactive WebFlux), Java 17, JJWT | None | Single entry point, CORS management, JWT signature validation, header injection (`X-User-*`), request routing |
+| [**auth-service**](auth-service) | `8081` (HTTP) | Spring Boot 3, Spring Security, Spring Data JPA, PostgreSQL Driver | `petclinic_auth` (PostgreSQL) | Customer self-registration (always `CUSTOMER`), credential verification, BCrypt hashing, JWT generation (`24h` expiration), admin-only staff accounts, bootstrap admin from the environment |
+| [**pet-service**](pet-service) | `8082` (HTTP) | Spring Boot, Spring Security, Spring Data JPA, Flyway, `grpc-client-spring-boot-starter`, `spring-kafka` | `pet_clinic_pets` (PostgreSQL) | Clinic business logic: Pet, Owner, Appointment, Boarding, MedicalRecord, Spa; role and ownership authorization. Calls Billing over gRPC and publishes Kafka events, both through the transactional outbox |
+| [**billing-service**](billing-service) | `8083` (HTTP)<br/>`9090` (gRPC) | Spring Boot, `grpc-server-spring-boot-starter`, Spring Data JPA | `pet_clinic_billing` (PostgreSQL) | Customer billing accounts, ledger balances, gRPC RPC implementation for instant account provisioning |
+| [**analytics-service**](analytics-service) | `8084` (HTTP) | Spring Boot, `spring-kafka`, Spring Data JPA, PostgreSQL | `pet_clinic_analytics` (PostgreSQL) | Consumes Protobuf messages from Kafka, aggregates clinic metrics (e.g. pet counts per species), idempotent on `event_id` (`processed_events`), DLT error handling |
+| [**proto-common**](proto-common) | N/A (Shared Lib) | Protobuf 3 compiler, `protobuf-java`, `grpc-protobuf`, `grpc-stub` | N/A | Language-neutral binary message and gRPC service contracts compiled to Java |
 | **Kafka Broker** | `9092` (Client)<br/>`9093` (Controller) | Confluent Platform Kafka 7.6.1 (KRaft Mode) | Internal log segments | High-throughput, distributed event streaming without Zookeeper |
 | **PostgreSQL** | `5432` | PostgreSQL 15 Alpine | Multi-database container | Persistent relational storage with schema migrations |
 
@@ -83,7 +83,7 @@ flowchart TB
 The API Gateway acts as the gatekeeper for all incoming external traffic.
 
 ### 3.1 Gateway Architecture Components
-* **[RouteValidator.java](file:///d:/pet-clinic-management/api-gateway/src/main/java/com/petclinic/apigateway/filter/RouteValidator.java)**:
+* **[RouteValidator.java](api-gateway/src/main/java/com/petclinic/apigateway/filter/RouteValidator.java)**:
   Defines an open-endpoints whitelist that bypasses token inspection (exact path match, not `contains`):
   ```java
   public static final Set<String> openApiEndpoints = Set.of(
@@ -91,7 +91,7 @@ The API Gateway acts as the gatekeeper for all incoming external traffic.
       "/api/v1/auth/login"
   );
   ```
-* **[AuthenticationFilter.java](file:///d:/pet-clinic-management/api-gateway/src/main/java/com/petclinic/apigateway/filter/AuthenticationFilter.java)**:
+* **[AuthenticationFilter.java](api-gateway/src/main/java/com/petclinic/apigateway/filter/AuthenticationFilter.java)**:
   Inherits from `AbstractGatewayFilterFactory`. For any secured path:
   1. Checks for the presence of the `Authorization: Bearer <JWT>` header.
   2. Parses and verifies the HMAC-SHA256 signature using the shared secret key.
@@ -147,7 +147,7 @@ sequenceDiagram
 When a new pet owner is registered, the system creates a corresponding financial billing account via gRPC. The call is made by the outbox relay **after** the owner row commits (see 4.4), never inside the request transaction.
 
 ### 4.1 Protocol Contract (`billing_service.proto`)
-Located in [proto-common/.../billing_service.proto](file:///d:/pet-clinic-management/proto-common/src/main/proto/billing_service.proto):
+Located in [proto-common/.../billing_service.proto](proto-common/src/main/proto/billing_service.proto):
 ```protobuf
 syntax = "proto3";
 package com.petclinic.billing.grpc;
@@ -173,7 +173,7 @@ message BillingResponse {
 ```
 
 ### 4.2 Client Implementation (`pet-service`)
-* Configured in [application.yml](file:///d:/pet-clinic-management/pet-service/src/main/resources/application.yml):
+* Configured in [application.yml](pet-service/src/main/resources/application.yml):
   ```yaml
   grpc:
     client:
@@ -181,13 +181,13 @@ message BillingResponse {
         address: 'static://billing-service:9090'
         negotiation-type: plaintext
   ```
-* Implemented in [BillingClientService.java](file:///d:/pet-clinic-management/pet-service/src/main/java/com/petclinic/petservice/service/BillingClientService.java):
-  * Uses `@GrpcClient("billing-service")` to inject `BillingServiceBlockingStub`.
-  * Wraps the call in error handling: catches `StatusRuntimeException`.
+* Implemented in [BillingClientService.java](pet-service/src/main/java/com/petclinic/petservice/service/BillingClientService.java):
+  * Uses `@GrpcClient("billing-service")` to inject `BillingServiceBlockingStub`, with a 5 s deadline per call.
+  * Called only by `OutboxRelay` after the owner has committed (see 4.4); a `StatusRuntimeException` is rethrown so the relay retries the row with backoff.
 
 ### 4.3 Server Implementation (`billing-service`)
-* Configured in [application.yml](file:///d:/pet-clinic-management/billing-service/src/main/resources/application.yml) listening on gRPC port `9090`.
-* Implemented in [BillingGrpcService.java](file:///d:/pet-clinic-management/billing-service/src/main/java/com/petclinic/billingservice/service/BillingGrpcService.java):
+* Configured in [application.yml](billing-service/src/main/resources/application.yml) listening on gRPC port `9090`.
+* Implemented in [BillingGrpcService.java](billing-service/src/main/java/com/petclinic/billingservice/service/BillingGrpcService.java):
   * Extends `BillingServiceImplBase` with `@GrpcService`.
   * Persists `BillingAccount` entity into PostgreSQL (`status = ACTIVE`, `balance = 0.00`).
   * Streams back `BillingResponse` via `responseObserver.onNext(response)` and `responseObserver.onCompleted()`.
@@ -231,7 +231,7 @@ sequenceDiagram
 When mutations occur in the Pet Service (such as a new pet being added), events are emitted asynchronously to Kafka. This decouples write-heavy clinical operations from analytical queries.
 
 ### 5.1 Protobuf Event Contract (`pet_events.proto`)
-Located in [proto-common/.../pet_events.proto](file:///d:/pet-clinic-management/proto-common/src/main/proto/pet_events.proto):
+Located in [proto-common/.../pet_events.proto](proto-common/src/main/proto/pet_events.proto):
 ```protobuf
 syntax = "proto3";
 package com.petclinic.events;
@@ -253,13 +253,13 @@ message PetEvent {
 ```
 
 ### 5.2 Producer: `pet-service`
-* **Configuration** in [application.yml](file:///d:/pet-clinic-management/pet-service/src/main/resources/application.yml):
+* **Configuration** in [application.yml](pet-service/src/main/resources/application.yml):
   * `bootstrap-servers: kafka:9092`
   * `key-serializer`: `StringSerializer` (pet ID)
   * `value-serializer`: `ByteArraySerializer` (binary Protobuf)
   * `acks: all` (highest durability guarantee across in-sync replicas)
   * `retries: 3`
-* **Publishing Mechanism** in [PetEventPublisher.java](file:///d:/pet-clinic-management/pet-service/src/main/java/com/petclinic/petservice/kafka/PetEventPublisher.java):
+* **Publishing Mechanism** in [PetEventPublisher.java](pet-service/src/main/java/com/petclinic/petservice/kafka/PetEventPublisher.java):
   * `PetService.addPet` does **not** publish directly: `OutboxService` builds the `PetEvent` (with a stable `event_id`) and stores it in `outbox_events` in the same transaction as the pet, so an event exists if and only if the pet was committed.
   * `OutboxRelay` publishes it after commit via `PetEventPublisher.publish`, which waits for the broker ack (10s) before the row is marked processed; failures are retried with backoff.
   * Uses `String.valueOf(pet.getId())` as the Kafka message key.
@@ -269,12 +269,12 @@ message PetEvent {
 ### 5.3 Consumer & Error Handling: `analytics-service`
 * **Consumer Group**: `analytics-group`
 * **Topic**: `pet-events`
-* **Deserialization** in [PetEventConsumer.java](file:///d:/pet-clinic-management/analytics-service/src/main/java/com/petclinic/analytics/kafka/PetEventConsumer.java):
+* **Deserialization** in [PetEventConsumer.java](analytics-service/src/main/java/com/petclinic/analytics/kafka/PetEventConsumer.java):
   * Listens using `@KafkaListener(topics = "${app.kafka.topics.pet-events}", groupId = "analytics-group")`.
   * Parses binary bytes: `PetEvent event = PetEvent.parseFrom(record.value())`.
   * Routes by `event.getEventType()`:
-    * If `"PET_CREATED"`: delegates to [StatisticService.java](file:///d:/pet-clinic-management/analytics-service/src/main/java/com/petclinic/analytics/service/StatisticService.java) to increment the species counter.
-* **Dead Letter Topic (DLT) & Retry Pattern** in [KafkaConsumerConfig.java](file:///d:/pet-clinic-management/analytics-service/src/main/java/com/petclinic/analytics/config/KafkaConsumerConfig.java):
+    * If `"PET_CREATED"`: delegates to [StatisticService.java](analytics-service/src/main/java/com/petclinic/analytics/service/StatisticService.java) to increment the species counter.
+* **Dead Letter Topic (DLT) & Retry Pattern** in [KafkaConsumerConfig.java](analytics-service/src/main/java/com/petclinic/analytics/config/KafkaConsumerConfig.java):
   * Uses `DefaultErrorHandler` configured with `FixedBackOff(1000L, 3L)` (3 retries with 1-second delay).
   * If the payload is unparseable (`InvalidProtocolBufferException`) or downstream processing fails after 3 attempts, `DeadLetterPublishingRecoverer` automatically publishes the failed message to `pet-events.DLT`, preserving partition numbering for debugging without blocking the main stream.
 
@@ -284,29 +284,28 @@ sequenceDiagram
     actor Client
     participant PetCtrl as Pet Service (Controller & Svc)
     participant PetDB as Pet Database (PostgreSQL)
-    participant Publisher as PetEventPublisher
+    participant Relay as OutboxRelay (every 1 s)
     participant Kafka as Kafka Broker (pet-events)
     participant Consumer as Analytics (PetEventConsumer)
     participant StatSvc as Analytics (StatisticService)
-    participant H2DB as Analytics DB (PostgreSQL)
+    participant AnDB as Analytics DB (PostgreSQL)
     participant DLT as Kafka (pet-events.DLT)
 
     Client->>PetCtrl: POST /api/v1/pets (Name: 'Milo', Species: 'DOG', OwnerId: 42)
-    PetCtrl->>PetDB: INSERT INTO pets ...
-    PetDB-->>PetCtrl: savedPet (id = 88)
+    PetCtrl->>PetDB: BEGIN, INSERT pets, INSERT outbox_events (PET_CREATED, PetEvent with event_id), COMMIT
+    PetCtrl-->>Client: 201 Created (does not wait for Kafka)
 
-    Note over PetCtrl, Publisher: Asynchronous Kafka Event Emission
-    PetCtrl->>Publisher: publishPetCreatedEvent(savedPet)
-    Publisher->>Publisher: Build PetEvent (Protobuf) & serialize to byte[]
-    Publisher->>Kafka: kafkaTemplate.send("pet-events", key="88", payload)
-    PetCtrl-->>Client: 201 Created (Pet JSON returned immediately)
+    Note over Relay, Kafka: After commit, asynchronous to the request
+    Relay->>PetDB: SELECT pending ... FOR UPDATE SKIP LOCKED
+    Relay->>Kafka: send("pet-events", key="88", payload), wait for the ack (acks=all, 10 s)
+    Relay->>PetDB: processed_at = now (on failure: attempts++, backoff)
 
-    Note over Kafka, Consumer: Asynchronous Consumption & Real-time Aggregation
-    Kafka->>Consumer: Push record (partition=0, offset=15, key="88")
+    Kafka->>Consumer: Push record (partition, offset, key="88")
     Consumer->>Consumer: PetEvent.parseFrom(bytes)
     alt Successfully Parsed
         Consumer->>StatSvc: handlePetCreatedEvent(event)
-        StatSvc->>H2DB: SELECT / UPDATE pet_statistics SET total_count = total_count + 1 WHERE species = 'DOG'
+        StatSvc->>AnDB: event_id already in processed_events? skip
+        StatSvc->>AnDB: INSERT processed_events + increment pet_statistics (one transaction)
         StatSvc-->>Consumer: Done
     else Corrupt Payload / Deserialization Error
         Consumer->>Consumer: Throw RuntimeException
@@ -322,23 +321,23 @@ sequenceDiagram
 ### Scenario A: New User Onboarding & Pet Registration
 
 1. **User Sign Up**:
-   * Request: `POST http://localhost:8080/api/v1/auth/register` with `{ username, password, email, role }`.
+   * Request: `POST http://localhost:8080/api/v1/auth/register` with `{ username, password, fullName }` (no role: self-registration always creates a `CUSTOMER`).
    * Result: Auth Service hashes password with BCrypt and inserts into `petclinic_auth.users`.
 2. **User Login**:
    * Request: `POST http://localhost:8080/api/v1/auth/login` with `{ username, password }`.
-   * Result: Auth Service returns signed JWT token.
-3. **Register Owner (Triggers gRPC)**:
+   * Result: Auth Service returns a signed JWT with `userId` and `role`.
+3. **Register Owner (Triggers gRPC via the outbox)**:
    * Request: `POST http://localhost:8080/api/v1/owners` with `Authorization: Bearer <JWT>`.
-   * Gateway verifies JWT, injects `X-User-*` headers, routes to `pet-service`.
-   * Pet Service creates Owner in `pet_clinic_pets.owners`.
-   * Pet Service synchronously calls Billing Service gRPC on port `9090` -> creates billing account in `pet_clinic_billing.billing_accounts`.
-4. **Register Pet (Triggers Kafka & Analytics)**:
-   * Request: `POST http://localhost:8080/api/v1/pets` with `Authorization: Bearer <JWT>`.
-   * Pet Service creates Pet in `pet_clinic_pets.pets`.
-   * Pet Service publishes binary `PetEvent` to Kafka topic `pet-events`.
-   * Analytics Service consumes event, updates `analyticsdb.pet_statistics`.
+   * Gateway verifies JWT, strips client-sent `X-User-*`, injects its own, routes to `pet-service`.
+   * Pet Service creates the Owner in `pet_clinic_pets.owners`, linked to the customer's account (`user_id`), and an `outbox_events` row in the same transaction; returns `201`.
+   * `OutboxRelay` then calls Billing Service gRPC on port `9090`, which creates the account in `pet_clinic_billing.billing_accounts` (idempotent per `customer_id`).
+4. **Register Pet (Triggers Kafka & Analytics via the outbox)**:
+   * Request: `POST http://localhost:8080/api/v1/pets` with `Authorization: Bearer <JWT>` (a customer can only add to their own owner profile).
+   * Pet Service creates the Pet in `pet_clinic_pets.pets` and a `PET_CREATED` outbox row in the same transaction.
+   * `OutboxRelay` publishes the binary `PetEvent` to Kafka topic `pet-events`.
+   * Analytics Service consumes the event, dedupes on `event_id`, updates `pet_clinic_analytics.pet_statistics`.
 5. **View Clinic Analytics**:
-   * Request: `GET http://localhost:8084/api/v1/analytics/summary` (or via Gateway).
+   * Request: `GET http://localhost:8080/api/v1/analytics/summary` with the JWT (the service port is not reachable from outside).
    * Result: Returns aggregate JSON `{ totalPets: 1, breakdown: [ { species: "DOG", totalCount: 1 } ] }`.
 
 ---
@@ -352,8 +351,9 @@ erDiagram
         bigint id PK
         varchar username UK
         varchar password
-        varchar email
+        varchar full_name
         varchar role
+        boolean enabled
         timestamp created_at
     }
 
@@ -364,7 +364,18 @@ erDiagram
         varchar phone_number UK
         varchar email
         text address
+        bigint user_id UK
         timestamp created_at
+    }
+    OUTBOX_EVENTS {
+        bigint id PK
+        varchar event_type
+        varchar aggregate_id
+        bytea payload
+        int attempts
+        text last_error
+        timestamp next_attempt_at
+        timestamp processed_at
     }
     PETS {
         bigint id PK
@@ -428,7 +439,7 @@ erDiagram
     %% Billing Service DB
     BILLING_ACCOUNTS {
         bigint id PK
-        bigint customer_id
+        bigint customer_id UK
         decimal balance
         varchar status
         timestamp created_at
@@ -440,6 +451,10 @@ erDiagram
         varchar species UK
         bigint total_count
         timestamp last_updated
+    }
+    PROCESSED_EVENTS {
+        varchar event_id PK
+        timestamp processed_at
     }
 
     OWNERS ||--o{ PETS : "has"
@@ -464,9 +479,10 @@ erDiagram
 2. **Stateless Edge Security**:
    * Centralized JWT validation at the API Gateway keeps microservices decoupled from authentication logic while passing user context downstream via headers.
 3. **Resilience & Fault Isolation**:
-   * gRPC failures do not break the main transaction in `OwnerService`.
-   * Kafka consumer implements a 3-attempt exponential/fixed backoff before quarantine to a Dead Letter Topic (`.DLT`), preventing poison-pill deadlocks.
+   * Cross-service side effects go through the transactional outbox: they happen if and only if the data committed, and billing or Kafka being down delays them (retried with exponential backoff) instead of losing them.
+   * Delivery is at-least-once, so billing (per `customer_id`) and analytics (per `event_id`) are idempotent.
+   * Kafka consumer retries 3 times with a fixed 1 s backoff before quarantine to a Dead Letter Topic (`.DLT`), so a poison pill does not block the partition.
 4. **Partition-Key Ordering**:
    * Kafka messages are keyed by `petId`, guaranteeing that all events for a given pet are processed in order by the analytics engine.
 5. **Database-per-Service**:
-   * Each service owns its schema and isolated database instance (`petclinic_auth`, `pet_clinic_pets`, `pet_clinic_billing`, and in-memory `analyticsdb`), preventing direct cross-database coupling.
+   * Each service owns its schema and isolated database (`petclinic_auth`, `pet_clinic_pets`, `pet_clinic_billing`, `pet_clinic_analytics`, all PostgreSQL), preventing direct cross-database coupling.

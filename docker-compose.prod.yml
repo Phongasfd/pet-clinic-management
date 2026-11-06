@@ -107,6 +107,9 @@ services:
       - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
       - GRPC_CLIENT_BILLING-SERVICE_ADDRESS=static://billing-service:9090
       - SPRING_KAFKA_PRODUCER_BOOTSTRAP-SERVERS=kafka:9092
+      # the admin client too: without it it dials localhost, waits ~30 s at startup and never
+      # creates the 3-partition pet-events topic (the producer then auto-creates it with 1)
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - APP_KAFKA_TOPICS_PET-EVENTS=${KAFKA_TOPIC_PET_EVENTS:-pet-events}
     depends_on:
       postgres-db:
@@ -148,6 +151,8 @@ services:
       - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
       # consumer AND the DLT producer
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      # must match pet-service's topic, or analytics silently stops counting
+      - APP_KAFKA_TOPICS_PET-EVENTS=${KAFKA_TOPIC_PET_EVENTS:-pet-events}
     depends_on:
       postgres-db:
         condition: service_healthy

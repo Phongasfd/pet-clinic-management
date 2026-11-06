@@ -86,6 +86,9 @@ services:
       - SPRING_DATASOURCE_PASSWORD=petclinic_password
       - GRPC_CLIENT_BILLING-SERVICE_ADDRESS=static://billing-service:9090
       - SPRING_KAFKA_PRODUCER_BOOTSTRAP-SERVERS=kafka:9092
+      # the admin client too: without it it dials localhost, waits ~30 s at startup and never
+      # creates the 3-partition pet-events topic (the producer then auto-creates it with 1)
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     depends_on:
       postgres-db:
         condition: service_healthy
