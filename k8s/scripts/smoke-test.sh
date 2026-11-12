@@ -14,7 +14,12 @@ NS="${NAMESPACE:-petclinic}"
 RUN="$(date +%s)$RANDOM"
 
 step() { printf '\n== %s\n' "$*"; }
-fail() { echo "FAIL: $*" >&2; exit 1; }
+fail() {
+  echo "FAIL: $*" >&2
+  # an annotation can be read without a GitHub login, unlike the job log
+  [ -n "${GITHUB_ACTIONS:-}" ] && echo "::error title=smoke-test::$(printf '%s' "$*" | tr '\n' ' ' | head -c 1500)"
+  exit 1
+}
 # poll "description" timeout_seconds command...
 poll() {
   local what="$1" timeout="$2"; shift 2
