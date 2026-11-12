@@ -51,6 +51,11 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer  # Protobuf dưới dạng bytes
       properties:
         spring.json.trusted.packages: "*"  # Cho phép deserialize từ mọi package (dùng nếu cần JSON fallback)
+        # Consumer không được tự tạo topic: nếu analytics lên trước pet-service, broker tạo
+        # pet-events với 1 partition, consumer nhận assignment [pet-events-0], rồi pet-service
+        # nâng lên 3 partition và sự kiện ở partition 1, 2 không được đếm tới ~5 phút sau
+        # (lần refresh metadata kế tiếp). Topic do KafkaConsumerConfig khai báo với 3 partition.
+        allow.auto.create.topics: false
 
 # ----------------------------------------------------------------
 # Custom application properties

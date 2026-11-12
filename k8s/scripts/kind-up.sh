@@ -11,6 +11,10 @@ NS=petclinic
 SERVICES="api-gateway auth-service pet-service billing-service analytics-service"
 SECRETS=k8s/overlays/local/secrets.env
 
+# A rollout that times out only says "timed out waiting for the condition". Print why,
+# right here in the same output: pod states, recent events, and the pods' own words.
+trap 'k8s/scripts/diagnose.sh' ERR
+
 if ! kind get clusters | grep -qx "$CLUSTER"; then
   kind create cluster --name "$CLUSTER" --config k8s/kind/cluster.yaml
 fi

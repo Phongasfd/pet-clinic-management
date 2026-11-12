@@ -325,6 +325,8 @@ Kẻ tấn công chiếm được process Java cũng không cài thêm công c�
 
 PDB chỉ bảo vệ khỏi gián đoạn **chủ động** (drain, autoscaler bớt node). Node chết hay pod crash thì phải nhờ số replica.
 
+**Bẫy đã gặp thật trong CI:** `namespace: petclinic` trong `base` chỉ gán cho resource của `base`. Secret do `secretGenerator` của overlay `local` sinh ra (và Ingress, PDB của overlay `prod`) không có namespace, nên `kubectl apply` đặt chúng vào `default`. Postgres trong `petclinic` không tìm thấy Secret, kẹt ở `CreateContainerConfigError`, và `rollout status` chỉ báo `timed out waiting for the condition`. Sửa: khai lại `namespace: petclinic` ở mỗi overlay. kubeconform không bắt được lỗi này vì từng object vẫn hợp lệ; chỉ khi deploy thật mới lộ ra, đó là giá trị của job e2e trên kind.
+
 ---
 
 ## 7. Bài thực hành
@@ -424,6 +426,13 @@ k get hpa -w
 
 Đây là test xuyên service mà README trước đây ghi là còn thiếu.
 
+Khi lỗi, [`diagnose.sh`](../k8s/scripts/diagnose.sh) in trạng thái pod, events và log của pod, và trong GitHub Actions ghi chúng thành **annotation** của job. Log của job cần đăng nhập GitHub mới xem được, annotation thì đọc được công khai qua API.
+
+**Hai lỗi thật mà job e2e đã bắt, những lỗi unit/integration test không thấy:**
+
+1. Secret sinh ở overlay nằm trong namespace `default` (phần 6.14): Postgres không lên.
+2. **Race tạo topic Kafka.** analytics-service lên trước pet-service, subscribe `pet-events` khi topic chưa có, và broker tự tạo nó với 1 partition. Vài giây sau pet-service nâng lên 3 partition, nhưng consumer đã nhận assignment `[pet-events-0]` và chỉ thấy 2 partition mới ở lần refresh metadata kế tiếp (`metadata.max.age.ms`, 5 phút). Sự kiện của pet rơi vào partition 1, 2 nên không được đếm. Cùng lỗi đó làm `pet-events.DLT` chỉ có 1 partition, trong khi recoverer gửi message lỗi vào cùng số partition, nên message hỏng từ partition 1, 2 không vào được DLT. Sửa: analytics đặt `allow.auto.create.topics: false` cho consumer và tự khai báo cả `pet-events` lẫn `pet-events.DLT` với 3 partition (KafkaAdmin tạo topic trước khi listener chạy), nên service nào lên trước cũng ra cùng một topic. Docker Compose cũng có thể gặp race này, chỉ là thứ tự khởi động ở đó thường may mắn hơn.
+
 ---
 
 ## 9. Gỡ lỗi nhanh
@@ -433,7 +442,7 @@ k get hpa -w
 | `Pending` | không đủ CPU/RAM trên node, PVC chưa bind | `k describe pod`, phần Events |
 | `ErrImagePull` / `ImagePullBackOff` | quên `kind load docker-image`, sai tag | `k describe pod` |
 | `Init:0/2` lâu | Postgres/Kafka chưa lên, hoặc NetworkPolicy chặn | `k logs <pod> -c wait-for-kafka` |
-| `CreateContainerConfigError` | thiếu Secret/ConfigMap hoặc key | `k describe pod` |
+| `CreateContainerConfigError` | thiếu Secret/ConfigMap hoặc key, hoặc chúng nằm ở namespace khác (`kubectl get secret -A`) | `k describe pod` |
 | `CrashLoopBackOff` | app lỗi khi khởi động (sai JWT_SECRET, DB...) | `k logs <pod> --previous` |
 | `OOMKilled` (exit 137) | heap + phần ngoài heap vượt memory limit | giảm `MaxRAMPercentage` hoặc tăng limit |
 | Running nhưng 0/1 Ready | readiness probe thất bại | `k describe pod`, `k logs` |

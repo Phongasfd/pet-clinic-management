@@ -7,8 +7,10 @@ name: CI — kubernetes
 #           NetworkPolicy and the CronJob, i.e. the cross-service test the unit/integration
 #           suites cannot do.
 on:
+  workflow_dispatch:
   push:
-    branches: [ main, master, develop ]
+    # feat/fix branches too: the deployment can be checked before a pull request exists
+    branches: [ main, master, develop, 'feat/**', 'fix/**' ]
     paths:
       - 'k8s/**'
       - '**/Dockerfile'
@@ -48,6 +50,20 @@ jobs:
               | kubeconform -strict -summary -kubernetes-version 1.31.0
           done
 
+      # kubeconform checks each object alone, so it cannot see an object rendered into the
+      # wrong namespace (an overlay's generated Secret once landed in "default").
+      - name: Every object is in namespace petclinic
+        run: |
+          for overlay in local prod; do
+            stray=$(kubectl kustomize "k8s/overlays/$overlay" \
+              | yq ea 'select(.kind != "Namespace" and .metadata.namespace != "petclinic") | .kind + "/" + .metadata.name')
+            if [ -n "$stray" ]; then
+              echo "::error::$overlay renders objects outside namespace petclinic: $stray"
+              exit 1
+            fi
+            echo "$overlay: ok"
+          done
+
   e2e:
     name: deploy to kind + smoke test
     needs: validate
@@ -64,21 +80,15 @@ jobs:
           cluster_name: petclinic
           config: k8s/kind/cluster.yaml
 
+      # On failure, kind-up.sh runs k8s/scripts/diagnose.sh itself (pods that are not Ready)
       - name: Build images and deploy
         run: k8s/scripts/kind-up.sh
 
       - name: Smoke test
+        id: smoke
         run: k8s/scripts/smoke-test.sh
 
+      # Every app pod's state and logs, also written as job annotations (readable without login)
       - name: Diagnostics
-        if: failure()
-        run: |
-          kubectl -n petclinic get all,pvc,networkpolicy,hpa,cronjob,job -o wide || true
-          kubectl -n petclinic get events --sort-by=.lastTimestamp | tail -n 60 || true
-          kubectl -n petclinic describe pods | tail -n 300 || true
-          for w in deployment/api-gateway deployment/auth-service deployment/pet-service \
-                   deployment/billing-service deployment/analytics-service \
-                   statefulset/postgres statefulset/kafka; do
-            echo "===== $w"
-            kubectl -n petclinic logs "$w" --all-containers --tail=150 || true
-          done
+        if: failure() && steps.smoke.outcome == 'failure'
+        run: k8s/scripts/diagnose.sh all
