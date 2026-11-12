@@ -2,6 +2,17 @@
 # and the gateway route to pet-service:8082 (every /pets, /owners, ... call failed).
 server:
   port: ${SERVER_PORT:8082}
+  # Kubernetes sends SIGTERM on every rollout and scale-in: stop taking new requests,
+  # finish the in-flight ones, then exit (timeout set in k8s/base/config.yaml)
+  shutdown: graceful
+
+# /actuator/health/liveness and /actuator/health/readiness, used by the Kubernetes probes
+# (k8s/base/apps/*.yaml). Only the health endpoint is exposed over HTTP, without details.
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
 
 spring:
   application:

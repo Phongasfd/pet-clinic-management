@@ -1,0 +1,4 @@
+# Shell scripts and Kubernetes files keep LF on Windows checkouts too: a CRLF script
+# mounted from a ConfigMap fails in the container with "sh: $'\r': command not found".
+*.sh text eol=lf
+k8s/** text eol=lf

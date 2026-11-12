@@ -486,3 +486,9 @@ erDiagram
    * Kafka messages are keyed by `petId`, guaranteeing that all events for a given pet are processed in order by the analytics engine.
 5. **Database-per-Service**:
    * Each service owns its schema and isolated database (`petclinic_auth`, `pet_clinic_pets`, `pet_clinic_billing`, `pet_clinic_analytics`, all PostgreSQL), preventing direct cross-database coupling.
+6. **Deployment on Kubernetes** ([`k8s/`](k8s), guide in [docs/kubernetes.md](docs/kubernetes.md)):
+   * Every service is a Deployment behind a ClusterIP Service with the same DNS name as in docker compose; PostgreSQL and Kafka (KRaft) are StatefulSets with their own PersistentVolumeClaims. Only the gateway is exposed (NodePort on kind, Ingress in the `prod` overlay).
+   * **NetworkPolicy** denies all ingress, then allows exactly the edges of the diagram above (gateway → auth/pet/analytics, pet → billing gRPC, services → postgres, pet/analytics → kafka). This is what makes trusting the gateway's `X-User-*` headers safe inside the cluster: no other pod can reach pet-service.
+   * Probes use Spring Boot Actuator's liveness/readiness groups (`/actuator/health/**`, the only actuator path open without gateway headers); billing-service's readiness is the native Kubernetes gRPC health probe. `server.shutdown: graceful` plus a `preStop` sleep keeps rolling updates from dropping requests.
+   * pet-service and analytics-service scale with an HPA: several pet-service pods share the outbox through `FOR UPDATE SKIP LOCKED`, and analytics stops at 3 pods, the partition count of `pet-events`.
+   * The `outbox-maintenance` CronJob deletes delivered outbox rows older than 7 days and fails (as an alert) when rows have exhausted their 10 delivery attempts.

@@ -1,0 +1,77 @@
+# A real cluster: images from a registry, two replicas of the request path, disruption
+# budgets, an Ingress. Before applying, create the Secret yourself (it is never in git):
+#   kubectl create namespace petclinic
+#   kubectl -n petclinic create secret generic petclinic-secrets \
+#     --from-literal=DB_USERNAME=... --from-literal=DB_PASSWORD=... \
+#     --from-literal=JWT_SECRET="$(openssl rand -base64 32)" \
+#     --from-literal=BOOTSTRAP_ADMIN_USERNAME=admin --from-literal=BOOTSTRAP_ADMIN_PASSWORD=...
+# (or let External Secrets / Sealed Secrets manage it). Then:
+#   kubectl apply -k k8s/overlays/prod
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - ingress.yaml
+  - pod-disruption-budgets.yaml
+
+# Pin an immutable tag (the git SHA) in production, never :latest
+images:
+  - name: petclinic/api-gateway
+    newName: ghcr.io/phongasfd/petclinic-api-gateway
+    newTag: "0.1.0"
+  - name: petclinic/auth-service
+    newName: ghcr.io/phongasfd/petclinic-auth-service
+    newTag: "0.1.0"
+  - name: petclinic/pet-service
+    newName: ghcr.io/phongasfd/petclinic-pet-service
+    newTag: "0.1.0"
+  - name: petclinic/billing-service
+    newName: ghcr.io/phongasfd/petclinic-billing-service
+    newTag: "0.1.0"
+  - name: petclinic/analytics-service
+    newName: ghcr.io/phongasfd/petclinic-analytics-service
+    newTag: "0.1.0"
+
+patches:
+  # Two pods minimum on the request path, so a node drain or a crash never takes it down
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: api-gateway|pet-service
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 2
+  # Spread each Deployment's pods over different nodes when possible
+  - target:
+      kind: Deployment
+      name: api-gateway
+    patch: |-
+      - op: add
+        path: /spec/template/spec/topologySpreadConstraints
+        value:
+          - maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: api-gateway
+  - target:
+      kind: Deployment
+      name: pet-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/topologySpreadConstraints
+        value:
+          - maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: pet-service
+  - target:
+      kind: StatefulSet
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 20Gi

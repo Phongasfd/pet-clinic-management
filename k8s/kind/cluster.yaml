@@ -1,0 +1,13 @@
+# kind ("Kubernetes in Docker"): a whole cluster in one Docker container.
+#   kind create cluster --config k8s/kind/cluster.yaml
+# kind 0.24+ ships kindnet with NetworkPolicy support, which network-policies.yaml needs.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: petclinic
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # host localhost:8080 -> node port 30080 -> api-gateway Service (overlays/local)
+      - containerPort: 30080
+        hostPort: 8080
+        protocol: TCP

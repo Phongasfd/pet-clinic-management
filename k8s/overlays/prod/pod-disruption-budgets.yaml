@@ -1,0 +1,22 @@
+# PodDisruptionBudget: limits *voluntary* disruptions (node drain during an upgrade, cluster
+# autoscaler removing a node). `kubectl drain` waits instead of evicting the last Ready pod.
+# Crashes and node failures are not covered: that is what replicas are for.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-gateway
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pet-service
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pet-service
