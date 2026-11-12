@@ -48,6 +48,20 @@ jobs:
               | kubeconform -strict -summary -kubernetes-version 1.31.0
           done
 
+      # kubeconform checks each object alone, so it cannot see an object rendered into the
+      # wrong namespace (an overlay's generated Secret once landed in "default").
+      - name: Every object is in namespace petclinic
+        run: |
+          for overlay in local prod; do
+            stray=$(kubectl kustomize "k8s/overlays/$overlay" \
+              | yq ea 'select(.kind != "Namespace" and .metadata.namespace != "petclinic") | .kind + "/" + .metadata.name')
+            if [ -n "$stray" ]; then
+              echo "::error::$overlay renders objects outside namespace petclinic: $stray"
+              exit 1
+            fi
+            echo "$overlay: ok"
+          done
+
   e2e:
     name: deploy to kind + smoke test
     needs: validate

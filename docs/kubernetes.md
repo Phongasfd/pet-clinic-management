@@ -325,6 +325,8 @@ Kẻ tấn công chiếm được process Java cũng không cài thêm công c�
 
 PDB chỉ bảo vệ khỏi gián đoạn **chủ động** (drain, autoscaler bớt node). Node chết hay pod crash thì phải nhờ số replica.
 
+**Bẫy đã gặp thật trong CI:** `namespace: petclinic` trong `base` chỉ gán cho resource của `base`. Secret do `secretGenerator` của overlay `local` sinh ra (và Ingress, PDB của overlay `prod`) không có namespace, nên `kubectl apply` đặt chúng vào `default`. Postgres trong `petclinic` không tìm thấy Secret, kẹt ở `CreateContainerConfigError`, và `rollout status` chỉ báo `timed out waiting for the condition`. Sửa: khai lại `namespace: petclinic` ở mỗi overlay. kubeconform không bắt được lỗi này vì từng object vẫn hợp lệ; chỉ khi deploy thật mới lộ ra, đó là giá trị của job e2e trên kind.
+
 ---
 
 ## 7. Bài thực hành
@@ -433,7 +435,7 @@ k get hpa -w
 | `Pending` | không đủ CPU/RAM trên node, PVC chưa bind | `k describe pod`, phần Events |
 | `ErrImagePull` / `ImagePullBackOff` | quên `kind load docker-image`, sai tag | `k describe pod` |
 | `Init:0/2` lâu | Postgres/Kafka chưa lên, hoặc NetworkPolicy chặn | `k logs <pod> -c wait-for-kafka` |
-| `CreateContainerConfigError` | thiếu Secret/ConfigMap hoặc key | `k describe pod` |
+| `CreateContainerConfigError` | thiếu Secret/ConfigMap hoặc key, hoặc chúng nằm ở namespace khác (`kubectl get secret -A`) | `k describe pod` |
 | `CrashLoopBackOff` | app lỗi khi khởi động (sai JWT_SECRET, DB...) | `k logs <pod> --previous` |
 | `OOMKilled` (exit 137) | heap + phần ngoài heap vượt memory limit | giảm `MaxRAMPercentage` hoặc tăng limit |
 | Running nhưng 0/1 Ready | readiness probe thất bại | `k describe pod`, `k logs` |

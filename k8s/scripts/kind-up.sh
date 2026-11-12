@@ -11,6 +11,24 @@ NS=petclinic
 SERVICES="api-gateway auth-service pet-service billing-service analytics-service"
 SECRETS=k8s/overlays/local/secrets.env
 
+# A rollout that times out only says "timed out waiting for the condition". Print why,
+# right here in the same output: pod states, recent events, and the pods' own words.
+on_error() {
+  echo "::group::kind-up failed: cluster state"
+  kubectl get secrets,configmaps -A --field-selector metadata.namespace!=kube-system 2>/dev/null | grep -v kube-root-ca || true
+  kubectl -n "$NS" get pods,pvc -o wide || true
+  kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -n 40 || true
+  for pod in $(kubectl -n "$NS" get pods -o name 2>/dev/null); do
+    if ! kubectl -n "$NS" get "$pod" -o jsonpath='{.status.containerStatuses[*].ready}' | grep -q true; then
+      echo "----- $pod"
+      kubectl -n "$NS" describe "$pod" | sed -n '/^Containers:/,$p' | tail -n 40 || true
+      kubectl -n "$NS" logs "$pod" --all-containers --tail=60 || true
+    fi
+  done
+  echo "::endgroup::"
+}
+trap on_error ERR
+
 if ! kind get clusters | grep -qx "$CLUSTER"; then
   kind create cluster --name "$CLUSTER" --config k8s/kind/cluster.yaml
 fi
