@@ -1,0 +1,40 @@
+# Everything the app needs, environment-neutral. Deploy an overlay, not this directory:
+#   kubectl apply -k k8s/overlays/local   (kind / minikube on a laptop)
+#   kubectl apply -k k8s/overlays/prod    (real cluster; Secret created out of band)
+# Guide: docs/kubernetes.md
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: petclinic
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: petclinic
+    includeSelectors: false   # selectors are immutable: keep them to app.kubernetes.io/name
+
+resources:
+  - namespace.yaml
+  - postgres/postgres.yaml
+  - kafka/kafka.yaml
+  - apps/auth-service.yaml
+  - apps/pet-service.yaml
+  - apps/billing-service.yaml
+  - apps/analytics-service.yaml
+  - apps/api-gateway.yaml
+  - autoscaling/hpa.yaml
+  - network-policies.yaml
+  - jobs/outbox-maintenance.yaml
+
+# Generated ConfigMaps get a content hash in their name (petclinic-config-7g2f9...), and
+# kustomize rewrites every reference. Changing a value therefore changes the pod template,
+# which makes the Deployments roll out new pods: no stale config in running pods.
+configMapGenerator:
+  - name: petclinic-config
+    envs:
+      - config.env
+  - name: postgres-init
+    files:
+      - init.sql=postgres/init.sql
+  - name: outbox-maintenance-script
+    files:
+      - outbox-maintenance.sh=jobs/outbox-maintenance.sh

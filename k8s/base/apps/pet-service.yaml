@@ -1,0 +1,169 @@
+# pet-service: the domain core. It trusts the X-User-* headers set by the gateway, so it must
+# be reachable only from the gateway: ClusterIP (no outside address) + NetworkPolicy
+# (network-policies.yaml) that rejects every other pod in the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: pet-service
+  labels:
+    app.kubernetes.io/name: pet-service
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: pet-service
+  ports:
+    - name: http
+      port: 8082
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pet-service
+  labels:
+    app.kubernetes.io/name: pet-service
+    app.kubernetes.io/component: backend
+spec:
+  # No "replicas": the HorizontalPodAutoscaler (autoscaling/hpa.yaml) owns that number. Several
+  # replicas are safe because OutboxRelay claims rows with FOR UPDATE SKIP LOCKED, and Flyway
+  # takes a database lock, so two pods starting together do not migrate twice.
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1          # start one new pod first...
+      maxUnavailable: 0    # ...and remove an old one only when the new one is Ready
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pet-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pet-service
+        app.kubernetes.io/component: backend
+    spec:
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 40
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Kubernetes has no depends_on. Init containers run to completion, in order, before the
+      # app starts: here they wait until PostgreSQL and Kafka accept connections. Without the
+      # Kafka wait, pet-service's admin client gives up and the producer later auto-creates
+      # pet-events with 1 partition instead of 3.
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z -w 2 postgres 5432; do echo waiting for postgres; sleep 2; done"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+        - name: wait-for-kafka
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z -w 2 kafka 9092; do echo waiting for kafka; sleep 2; done"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+      containers:
+        - name: pet-service
+          image: petclinic/pet-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8082
+          envFrom:
+            - configMapRef:
+                name: petclinic-config
+          env:
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:postgresql://$(DB_HOST):$(DB_PORT)/pet_clinic_pets
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: petclinic-secrets
+                  key: DB_USERNAME
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: petclinic-secrets
+                  key: DB_PASSWORD
+            # same variable names as docker-compose.yml (Spring relaxed binding)
+            - name: GRPC_CLIENT_BILLING-SERVICE_ADDRESS
+              value: $(BILLING_GRPC_ADDRESS)
+            - name: SPRING_KAFKA_PRODUCER_BOOTSTRAP-SERVERS
+              value: $(KAFKA_BOOTSTRAP_SERVERS)
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: $(KAFKA_BOOTSTRAP_SERVERS)
+            - name: APP_KAFKA_TOPICS_PET-EVENTS
+              value: $(KAFKA_TOPIC_PET_EVENTS)
+            - name: SPRING_JPA_SHOW_SQL
+              value: "false"
+          # startupProbe holds the other two probes back until Spring has started (Flyway,
+          # Kafka admin...), so a slow start is not mistaken for a dead process.
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36   # up to 3 minutes
+          # Liveness: is the process stuck? Failing restarts the container.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          # Readiness: should it receive traffic? Failing only removes the pod from the
+          # Service endpoints (rolling updates wait on this too); nothing is restarted.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              # On delete, endpoint removal and SIGTERM happen in parallel. Sleeping first
+              # lets kube-proxy and the gateway stop sending new requests before Spring's
+              # graceful shutdown starts, so a rollout drops no requests.
+              exec:
+                command: ["sleep", "5"]
+          # CPU: a request (used for scheduling and by the HPA) but no limit, so the JVM is
+          # never throttled. Memory: request = limit, the JVM heap is sized from it.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp   # the root filesystem is read-only; Tomcat needs a temp dir
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi

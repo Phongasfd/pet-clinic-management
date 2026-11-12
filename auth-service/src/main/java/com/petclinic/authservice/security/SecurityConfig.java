@@ -22,6 +22,8 @@ public class SecurityConfig {
                         // /error too: otherwise a 401/403/409 thrown by the controller is
                         // re-dispatched to /error, denied there, and the client sees a bare 403
                         .requestMatchers("/api/v1/auth/**", "/error").permitAll()
+                        // Kubernetes liveness/readiness probes (the kubelet sends no token)
+                        .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .sessionManagement(session -> session

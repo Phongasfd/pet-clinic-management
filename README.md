@@ -95,6 +95,7 @@ Adding a pet works the same way, except the relay publishes a `PetEvent`. It is 
 | Data | PostgreSQL 15 (one DB per service), Flyway (pet-service), JPA auditing |
 | Testing | JUnit 5, Mockito; pet-service integration tests on embedded PostgreSQL (zonky) and an in-JVM Kafka broker (no Docker); Spring `MockServerWebExchange` for the gateway |
 | Delivery | Docker, Docker Compose (dev and prod), one GitHub Actions workflow per service (path-filtered) |
+| Kubernetes | Kustomize (`base` + `local`/`prod` overlays), StatefulSets for PostgreSQL and Kafka, probes on Spring Boot Actuator and native gRPC health, HPA, NetworkPolicy, a CronJob for outbox maintenance; CI deploys to kind and runs an end-to-end smoke test. See [docs/kubernetes.md](docs/kubernetes.md) |
 
 ## Design decisions and trade-offs
 
@@ -153,6 +154,18 @@ curl -s -X POST localhost:8080/api/v1/auth/staff -H "Authorization: Bearer $ADMI
 
 > Upgrading an existing Postgres volume? `postgres-init.sql` only runs on a fresh volume, so create the analytics DB once: `CREATE DATABASE pet_clinic_analytics;`. Migration V4 closes duplicate active boarding stays the old code allowed (it keeps the newest per pet and per cage) before adding its unique indexes; without that, pet-service would fail to start on such data. Owners created before V4 have no `user_id`, so only staff can see them until one is linked.
 
+### On Kubernetes (kind)
+
+**Prerequisites:** Docker, [kind](https://kind.sigs.k8s.io/) 0.24+, kubectl, openssl (on Windows: Git Bash or WSL). About 5 GB of RAM for Docker.
+
+```bash
+k8s/scripts/kind-up.sh       # create the cluster, build and load the images, deploy, wait for Ready
+k8s/scripts/smoke-test.sh    # end-to-end: gateway, ownership 403, outbox -> gRPC/Kafka, NetworkPolicy, CronJob
+k8s/scripts/kind-down.sh     # delete the cluster
+```
+
+The gateway is again at `http://localhost:8080`, so the `curl` commands above work unchanged. The guide (in Vietnamese) explains every Kubernetes feature used and why, with hands-on labs: [docs/kubernetes.md](docs/kubernetes.md).
+
 ## Authorization
 
 The gateway authenticates (JWT); pet-service authorizes. Role rules sit on the controllers, ownership rules in the services, so a customer is limited both in *what* they can do and *whose* data they can touch.
@@ -180,7 +193,7 @@ for s in api-gateway auth-service billing-service analytics-service; do (cd $s &
 (cd pet-service && ./mvnw verify)                        # no Docker or local Postgres needed
 ```
 
-pet-service's integration tests start a real PostgreSQL (zonky embedded binaries) and an in-JVM Kafka broker, so row locks, partial unique indexes and the outbox relay run as in production, and Flyway V1-V4 are checked against the entities (`ddl-auto: validate`). An upgrade test migrates a database written by the previous release, with duplicate active stays, to V4. pet-service has 61 tests (15 of them on PostgreSQL); auth-service has 8, api-gateway 5, billing-service 4, analytics-service 2.
+pet-service's integration tests start a real PostgreSQL (zonky embedded binaries) and an in-JVM Kafka broker, so row locks, partial unique indexes and the outbox relay run as in production, and Flyway V1-V4 are checked against the entities (`ddl-auto: validate`). An upgrade test migrates a database written by the previous release, with duplicate active stays, to V4. pet-service has 62 tests (16 of them on PostgreSQL); auth-service has 8, api-gateway 5, billing-service 4, analytics-service 2.
 
 | Service | What is covered |
 | --- | --- |
@@ -189,10 +202,12 @@ pet-service's integration tests start a real PostgreSQL (zonky embedded binaries
 | pet-service | **Concurrency:** 16 simultaneous check-ins for one cage → exactly one wins; one pet into 8 cages at once → one stay; 8 simultaneous bookings for one slot → one appointment. **Authorization over HTTP:** 401 without gateway headers, customer A gets 403 on customer B's owner, pets and appointments, role rules per endpoint. **Outbox end to end:** `PET_CREATED` reaches Kafka keyed by `petId`; billing down → retried with backoff → delivered. Plus unit tests for the relay, state machines, slot overlap and owner linking |
 | billing-service | Idempotent create, concurrent insert race, invalid id |
 | analytics-service | Counts a new event once; ignores a redelivered one |
+| Kubernetes ([`ci-k8s.yml`](.github/workflows/ci-k8s.yml)) | Both overlays validated against the Kubernetes 1.31 schemas (kubeconform). Then a kind cluster in CI runs [`smoke-test.sh`](k8s/scripts/smoke-test.sh) across the deployed services: customer B gets 403, a new pet is counted by analytics (outbox → Kafka), the outbox drains and billing has the account (outbox → gRPC), an arbitrary pod cannot reach pet-service while a gateway-labelled one can, and the outbox CronJob succeeds |
 
 ## Roadmap
 
 - Distributed tracing across HTTP, gRPC and Kafka with OpenTelemetry, plus RED metrics.
 - RS256 and JWKS; short-lived access tokens with refresh.
-- Cross-service end-to-end test (pet-service → Kafka → analytics-service) on docker compose.
-- Outbox cleanup job, and alerts on rows that reach the attempt limit.
+- ~~Cross-service end-to-end test~~: done on kind in CI ([`smoke-test.sh`](k8s/scripts/smoke-test.sh)).
+- ~~Outbox cleanup job, and alerts on rows that reach the attempt limit~~: done as the `outbox-maintenance` CronJob (the Job fails when dead rows exist). Still to do: route that failure to a real alert (Prometheus `kube_job_status_failed`).
+- Kubernetes for production: managed PostgreSQL / Strimzi Kafka, images pushed to a registry by CI, External Secrets, per-call gRPC load balancing if billing scales out.

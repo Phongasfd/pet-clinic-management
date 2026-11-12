@@ -21,6 +21,15 @@ class AuthorizationIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void kubernetesProbesAreOpenButNothingElseUnderActuatorIs() throws Exception {
+        // the kubelet calls these without gateway headers (k8s/base/apps/pet-service.yaml)
+        mockMvc.perform(get("/actuator/health/liveness")).andExpect(status().isOk());
+        mockMvc.perform(get("/actuator/health/readiness")).andExpect(status().isOk());
+        // the permitAll is scoped to health: other actuator paths still need gateway headers
+        mockMvc.perform(get("/actuator/env")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void customerSeesOnlyTheirOwnOwnerProfileAndPets() throws Exception {
         long alice = newUserId();
         long bob = newUserId();

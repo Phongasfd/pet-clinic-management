@@ -1,0 +1,87 @@
+# CronJob: Kubernetes' cron. Every run creates a Job, which creates a Pod that runs to
+# completion. Run it by hand with:
+#   kubectl -n petclinic create job --from=cronjob/outbox-maintenance outbox-manual-1
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: outbox-maintenance
+  labels:
+    app.kubernetes.io/name: outbox-maintenance
+    app.kubernetes.io/component: maintenance
+spec:
+  schedule: "0 3 * * *"              # 03:00 every day...
+  timeZone: "Asia/Ho_Chi_Minh"       # ...Vietnam time, not the node's UTC (Kubernetes 1.27+)
+  concurrencyPolicy: Forbid          # never two runs at once
+  startingDeadlineSeconds: 600       # skip a run that could not start within 10 min
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5          # failed runs are the alerts: keep them around
+  jobTemplate:
+    spec:
+      backoffLimit: 0                # a dead-row alert must not be retried into silence
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: outbox-maintenance   # matched by the postgres NetworkPolicy
+            app.kubernetes.io/component: maintenance
+        spec:
+          restartPolicy: Never
+          enableServiceLinks: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70     # "postgres" user of the alpine image
+            runAsGroup: 70
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: outbox-maintenance
+              image: postgres:15-alpine   # only for psql
+              command: ["sh", "/scripts/outbox-maintenance.sh"]
+              env:
+                - name: DB_HOST
+                  valueFrom:
+                    configMapKeyRef:
+                      name: petclinic-config
+                      key: DB_HOST
+                - name: DB_PORT
+                  valueFrom:
+                    configMapKeyRef:
+                      name: petclinic-config
+                      key: DB_PORT
+                - name: DB_NAME
+                  value: pet_clinic_pets
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef:
+                      name: petclinic-secrets
+                      key: DB_USERNAME
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: petclinic-secrets
+                      key: DB_PASSWORD
+                - name: RETENTION_DAYS
+                  value: "7"
+                # must equal OutboxRelay.MAX_ATTEMPTS in pet-service
+                - name: MAX_ATTEMPTS
+                  value: "10"
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 64Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: outbox-maintenance-script

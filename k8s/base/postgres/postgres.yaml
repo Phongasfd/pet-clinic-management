@@ -1,0 +1,104 @@
+# PostgreSQL 15, one instance holding the four service databases (as in docker compose).
+#
+# StatefulSet instead of Deployment: the pod keeps a stable name (postgres-0) and its own
+# PersistentVolumeClaim (data-postgres-0), which survives pod restarts, rescheduling and
+# even `kubectl delete pod`. Only `kubectl delete pvc` (or deleting the namespace) wipes data.
+#
+# For production, prefer a managed database (RDS, Cloud SQL) or an operator such as
+# CloudNativePG (backups, failover, replicas); see docs/kubernetes.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  # Headless (no virtual IP): "postgres" resolves straight to the pod IP and every pod
+  # also gets its own DNS name (postgres-0.postgres). A StatefulSet needs this "governing" Service.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+    spec:
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60   # let Postgres checkpoint on shutdown
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: petclinic-secrets
+                  key: DB_USERNAME
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: petclinic-secrets
+                  key: DB_PASSWORD
+            # A subdirectory: many volume provisioners put lost+found at the root of the
+            # volume, and initdb refuses to run in a non-empty directory.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              # exec probes do not expand $(VARS); the shell expands $POSTGRES_USER
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\""]
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\""]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: init-sql
+          configMap:
+            name: postgres-init
+  # One PVC per replica, created from this template and kept when the pod goes away
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

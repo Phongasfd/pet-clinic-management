@@ -1,0 +1,43 @@
+# Laptop cluster (kind or minikube). Usage: k8s/scripts/kind-up.sh, or by hand:
+#   cp k8s/overlays/local/secrets.env.example k8s/overlays/local/secrets.env   # then edit
+#   kubectl apply -k k8s/overlays/local
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# Images built locally by k8s/scripts/build-images.sh and loaded into the cluster
+# (kind load docker-image / minikube image load); nothing is pulled from a registry.
+images:
+  - name: petclinic/api-gateway
+    newTag: dev
+  - name: petclinic/auth-service
+    newTag: dev
+  - name: petclinic/pet-service
+    newTag: dev
+  - name: petclinic/billing-service
+    newTag: dev
+  - name: petclinic/analytics-service
+    newTag: dev
+
+# The Secret is generated from a git-ignored file. Like the ConfigMaps, its name gets a
+# content hash, so changing a password rolls the pods that use it.
+secretGenerator:
+  - name: petclinic-secrets
+    envs:
+      - secrets.env
+
+patches:
+  # kind maps host port 8080 to node port 30080 (k8s/kind/cluster.yaml), so the gateway is
+  # at http://localhost:8080 exactly as with docker compose.
+  - target:
+      kind: Service
+      name: api-gateway
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30080
