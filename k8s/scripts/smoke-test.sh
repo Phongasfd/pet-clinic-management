@@ -3,8 +3,9 @@
 #   1. register + login, create an owner and a pet through the gateway
 #   2. another customer gets 403 on them (ownership rules)
 #   3. analytics counts the pet (pet-service -> outbox -> Kafka -> analytics-service)
+#   3b. search finds it, with a typo, for its owner only (Kafka -> search-service -> Elasticsearch)
 #   4. the outbox drains and billing has the owner's account (outbox -> gRPC -> billing)
-#   5. NetworkPolicy: a random pod cannot reach pet-service, a gateway-labelled pod can
+#   5. NetworkPolicy: a random pod cannot reach pet-service or Elasticsearch, the right labels can
 #   6. the outbox-maintenance CronJob runs successfully
 # Usage: k8s/scripts/smoke-test.sh   (BASE_URL, NAMESPACE, SKIP_NETPOL=1 to skip step 5)
 set -euo pipefail
@@ -90,6 +91,17 @@ analytics_counted() {
 }
 poll "totalPets > $BEFORE" 90 analytics_counted
 
+step "search finds the pet (outbox -> Kafka -> search-service -> Elasticsearch)"
+search_total() {  # search_total <token> <query>
+  curl -s "$BASE/api/v1/search/pets?q=$2" -H "Authorization: Bearer $1" | json_num total
+}
+# Alice has exactly one pet, and customers only ever see their own: total must be 1.
+# "mlu" (a typo) exercises the fuzzy query against the real index mapping.
+alice_finds_milu() { [ "$(search_total "$TOKEN" mlu)" = "1" ]; }
+poll "Alice's search for 'mlu' returns her pet" 120 alice_finds_milu
+[ "$(search_total "$BOB_TOKEN" milu)" = "0" ] || fail "Bob's search returned other customers' pets"
+echo "Alice: 1 hit, Bob: 0 hits"
+
 step "outbox drained and billing account created (outbox -> gRPC -> billing-service)"
 outbox_empty() { [ "$(psql_in pet_clinic_pets 'SELECT count(*) FROM outbox_events WHERE processed_at IS NULL')" = "0" ]; }
 poll "no undelivered outbox rows" 90 outbox_empty
@@ -97,18 +109,28 @@ poll "no undelivered outbox rows" 90 outbox_empty
   || fail "no billing account for owner $OWNER_ID"
 
 if [ "${SKIP_NETPOL:-0}" != "1" ]; then
-  step "NetworkPolicy: only the gateway may call pet-service"
-  probe() {  # probe <pod-name> [labels] : exit 0 if pet-service answered
-    kubectl -n "$NS" run "$1" --rm -i --quiet --restart=Never --image=busybox:1.36 ${2:+--labels="$2"} \
-      -- wget -q -T 5 -O /dev/null http://pet-service:8082/actuator/health/liveness >/dev/null 2>&1
+  step "NetworkPolicy: only the gateway may call pet-service, only search-service Elasticsearch"
+  probe() {  # probe <pod-name> <url> [labels] : exit 0 if the url answered
+    kubectl -n "$NS" run "$1" --rm -i --quiet --restart=Never --image=busybox:1.36 ${3:+--labels="$3"} \
+      -- wget -q -T 5 -O /dev/null "$2" >/dev/null 2>&1
   }
-  if probe "np-intruder-$RUN"; then
+  PET_URL=http://pet-service:8082/actuator/health/liveness
+  ES_URL=http://elasticsearch:9200/
+  if probe "np-intruder-$RUN" "$PET_URL"; then
     fail "an unlabelled pod reached pet-service: NetworkPolicy not enforced (CNI without policy support?)"
   fi
-  echo "unlabelled pod: blocked"
-  probe "np-gateway-$RUN" "app.kubernetes.io/name=api-gateway" \
+  echo "unlabelled pod -> pet-service: blocked"
+  probe "np-gateway-$RUN" "$PET_URL" "app.kubernetes.io/name=api-gateway" \
     || fail "a pod labelled as the gateway could not reach pet-service (policy too strict, or DNS down)"
-  echo "gateway-labelled pod: allowed"
+  echo "gateway-labelled pod -> pet-service: allowed"
+  # Elasticsearch has no password in base: the policy is the only thing protecting the index
+  if probe "np-es-intruder-$RUN" "$ES_URL"; then
+    fail "an unlabelled pod reached Elasticsearch"
+  fi
+  echo "unlabelled pod -> elasticsearch: blocked"
+  probe "np-es-search-$RUN" "$ES_URL" "app.kubernetes.io/name=search-service" \
+    || fail "a pod labelled as search-service could not reach Elasticsearch"
+  echo "search-service-labelled pod -> elasticsearch: allowed"
 fi
 
 step "outbox-maintenance CronJob runs"

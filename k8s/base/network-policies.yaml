@@ -38,7 +38,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: ["auth-service", "pet-service", "analytics-service"]
+        values: ["auth-service", "pet-service", "analytics-service", "search-service"]
   policyTypes: ["Ingress"]
   ingress:
     - from:
@@ -49,6 +49,7 @@ spec:
         - port: 8081
         - port: 8082
         - port: 8084
+        - port: 8085
 ---
 # gRPC billing: only pet-service's outbox relay calls it
 apiVersion: networking.k8s.io/v1
@@ -103,6 +104,25 @@ spec:
               - key: app.kubernetes.io/name
                 operator: In
                 # kafka itself: the broker connects to its own advertised address
-                values: ["pet-service", "analytics-service", "kafka"]
+                values: ["pet-service", "analytics-service", "search-service", "kafka"]
       ports:
         - port: 9092
+---
+# Elasticsearch runs without authentication in base: this policy is what keeps every other pod
+# (and a compromised one) from reading or deleting the index
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: elasticsearch-from-search-service-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: search-service
+      ports:
+        - port: 9200

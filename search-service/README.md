@@ -92,4 +92,10 @@ authorization filter, header parsing) and `PetSearchIntegrationTest` against a r
 
 - Events published before this service existed have no owner account id or version: those pets
   are found by staff, but not by their owner, until they are updated once.
-- Not yet in the Kubernetes manifests (`k8s/`): it needs an Elasticsearch StatefulSet first.
+
+## Kubernetes
+
+`k8s/base/apps/search-service.yaml` (Deployment, HPA 1-3) and `k8s/base/elasticsearch/` (single-node
+StatefulSet). In base Elasticsearch has no password and a NetworkPolicy lets only search-service
+reach port 9200; `overlays/prod` enables security with `ELASTIC_PASSWORD` from the Secret.
+The kind smoke test checks search end to end. Details: [docs/kubernetes.md](../docs/kubernetes.md).

@@ -1,0 +1,110 @@
+# Elasticsearch 8.13, single node: the read model of search-service, as in docker compose.
+#
+# Base runs it without authentication: only search-service can reach port 9200
+# (network-policies.yaml). overlays/prod turns security on with a password from the Secret.
+# For production, use the ECK operator (3 nodes, replicas, snapshots), see docs/kubernetes.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  labels:
+    app.kubernetes.io/name: elasticsearch
+spec:
+  clusterIP: None   # headless: the StatefulSet's pod gets a stable DNS name
+  selector:
+    app.kubernetes.io/name: elasticsearch
+  ports:
+    - name: http
+      port: 9200
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  labels:
+    app.kubernetes.io/name: elasticsearch
+    app.kubernetes.io/component: search-engine
+spec:
+  serviceName: elasticsearch
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: elasticsearch
+        app.kubernetes.io/component: search-engine
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000    # "elasticsearch" in the official image (its files are owned by 1000:0)
+        fsGroup: 1000      # the mounted volume becomes writable for that group
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+          ports:
+            - name: http
+              containerPort: 9200
+          env:
+            # The image turns env vars with dots into elasticsearch.yml settings.
+            # single-node: no cluster formation, and the bootstrap checks (vm.max_map_count...)
+            # only warn, so no privileged init container is needed to tune the node's kernel.
+            - name: discovery.type
+              value: single-node
+            - name: cluster.name
+              value: petclinic
+            - name: xpack.security.enabled
+              value: "false"
+            # Machine learning starts native processes and wants more memory: not used here
+            - name: xpack.ml.enabled
+              value: "false"
+            # mmap needs vm.max_map_count >= 262144 on the node; niofs works with the default
+            - name: node.store.allow_mmap
+              value: "false"
+            # subdirectory, for the same lost+found reason as PGDATA
+            - name: path.data
+              value: /usr/share/elasticsearch/data/es
+            # A laptop / CI disk is often > 90% full: the disk watermarks would make the index
+            # read-only. Off here, back on in overlays/prod.
+            - name: cluster.routing.allocation.disk.threshold_enabled
+              value: "false"
+            # Heap = half the memory limit; the rest is for the OS file cache Lucene relies on
+            - name: ES_JAVA_OPTS
+              value: -Xms512m -Xmx512m
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 200m
+              memory: 1Gi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
