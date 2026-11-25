@@ -1,6 +1,6 @@
 # Pet Clinic Management: event-driven microservices
 
-A veterinary clinic backend: owners, pets, medical records, vaccinations, appointments, boarding and spa. It is built as **five Spring Boot services behind an API gateway**. Services talk **synchronously over gRPC** and **asynchronously over Kafka (Protobuf)**, and both paths go through a **Transactional Outbox**, so cross-service side effects happen only when the data has committed.
+A veterinary clinic backend: owners, pets, medical records, vaccinations, appointments, boarding and spa. It is built as **six Spring Boot services behind an API gateway**. Services talk **synchronously over gRPC** and **asynchronously over Kafka (Protobuf)**, and both paths go through a **Transactional Outbox**, so cross-service side effects happen only when the data has committed. Full-text search runs on an **Elasticsearch read model (CQRS)** fed by the same events.
 
 ![api-gateway](https://github.com/Phongasfd/pet-clinic-management/actions/workflows/ci-api-gateway.yml/badge.svg)
 ![auth-service](https://github.com/Phongasfd/pet-clinic-management/actions/workflows/ci-auth-service.yml/badge.svg)
@@ -29,6 +29,9 @@ A veterinary clinic backend: owners, pets, medical records, vaccinations, appoin
 | **Double booking under concurrency** | Cage check-in used to read `status = AVAILABLE` and then write `OCCUPIED` without a lock, so concurrent requests could all get the same cage. Now the cage row is locked (`SELECT ... FOR UPDATE`) for the check, and **partial unique indexes** (`WHERE status = 'ACTIVE'`) make "one active stay per cage, one cage per pet" hold even for code that skips the lock. Appointment booking locks the pet row and rejects a second active appointment within 30 minutes. Both are proven by tests that fire 8 to 16 concurrent transactions at PostgreSQL. |
 | **Illegal state changes** | Appointment and spa statuses are state machines (`canTransitionTo`): a completed visit can't go back to `PENDING`, a spa ticket can't skip `IN_PROGRESS`. Invalid transitions return 409. |
 | **Poison messages and lost analytics** | `DefaultErrorHandler` retries 3 times, then sends the message to `pet-events.DLT`. Analytics state lives in PostgreSQL, not in-memory H2, so it survives restarts in step with Kafka offsets. |
+| **Full-text search without loading the write database** | **CQRS read model.** search-service consumes `pet-events` into Elasticsearch; pet-service is not called at query time. Events are full snapshots (event-carried state transfer), owner name and phone denormalized into each pet document. Custom `asciifolding` analyzer ("nguyen" finds "Nguyễn"), `search_as_you_type` + `bool_prefix` for autocomplete, `fuzziness: AUTO` for typos, phone prefix lookup, species facets. See [search-service](search-service). |
+| **Out-of-order and duplicate events in the read model** | The outbox retries a failed row with backoff, so a `PET_UPDATED` can overtake an older event of the same pet. Each event carries `pets.version` (JPA `@Version`, Flyway V5) and is written with Elasticsearch **external versioning**: an older or redelivered event gets a version conflict and is dropped, so no processed-events table is needed. Writes go through an alias with `require_alias`, so a missing alias fails loudly instead of auto-creating an index with the wrong mapping. |
+| **IDOR through search** | Customers' queries always carry an `ownerUserId` filter (filter context), so other customers' pets appear neither in hits nor in totals or facets. Missing gateway headers mean 401, never "see everything". |
 
 ## Architecture
 
@@ -38,6 +41,7 @@ flowchart TB
     gw -->|/api/v1/auth/**| auth["auth-service :8081<br/>register · login · JWT"]
     gw -->|"/pets /owners /appointments /boarding /spa-tickets"| pet["pet-service :8082<br/>domain + outbox_events"]
     gw -->|/api/v1/analytics/**| an["analytics-service :8084"]
+    gw -->|/api/v1/search/**| se["search-service :8085<br/>CQRS read model"]
     pet -.->|"OutboxRelay · gRPC · deadline 5s"| bill["billing-service :9090 gRPC<br/>idempotent per customer_id"]
     pet -.->|"OutboxRelay · Protobuf · acks=all"| kafka{{"Kafka (KRaft)<br/>pet-events · 3 partitions<br/>+ pet-events.DLT"}}
     kafka -.->|"consume · dedupe event_id"| an
@@ -45,6 +49,8 @@ flowchart TB
     pet --- dbp[(pet_clinic_pets<br/>Flyway V1-V4)]
     bill --- dbb[(pet_clinic_billing)]
     an --- dbn[(pet_clinic_analytics)]
+    kafka -.->|"consume, external version"| se
+    se --- es[(Elasticsearch<br/>alias pets → pets-v1)]
 ```
 
 Dashed arrows are asynchronous to the user's request: they start from the outbox relay, never from the HTTP request. Each service owns its database (database-per-service). The Protobuf contracts live in [`proto-common`](proto-common).
@@ -56,6 +62,7 @@ Dashed arrows are asynchronous to the user's request: they start from the outbox
 | [`pet-service`](pet-service) | Owners, pets, medical records, vaccinations, appointments, boarding (cages), spa; outbox + relay |
 | [`billing-service`](billing-service) | Billing accounts over gRPC, idempotent |
 | [`analytics-service`](analytics-service) | Pet counts per species from `pet-events`, idempotent consumer, DLT |
+| [`search-service`](search-service) | Elasticsearch index of pets built from `pet-events`; typo-tolerant, diacritic-insensitive search with per-customer filtering |
 | [`proto-common`](proto-common) | `billing_service.proto`, `pet_events.proto` |
 
 ## How it works
@@ -92,6 +99,7 @@ Adding a pet works the same way, except the relay publishes a `PetEvent`. It is 
 | Edge | Spring Cloud Gateway (WebFlux), JJWT |
 | Sync RPC | gRPC (`grpc-spring-boot-starter`), Protobuf 3 |
 | Async | Apache Kafka 7.6 in KRaft mode, Spring Kafka, Dead Letter Topic |
+| Search | Elasticsearch 8.13 (official Java client), custom analyzers, external versioning, index alias; Testcontainers for the integration test |
 | Data | PostgreSQL 15 (one DB per service), Flyway (pet-service), JPA auditing |
 | Testing | JUnit 5, Mockito; pet-service integration tests on embedded PostgreSQL (zonky) and an in-JVM Kafka broker (no Docker); Spring `MockServerWebExchange` for the gateway |
 | Delivery | Docker, Docker Compose (dev and prod), one GitHub Actions workflow per service (path-filtered) |

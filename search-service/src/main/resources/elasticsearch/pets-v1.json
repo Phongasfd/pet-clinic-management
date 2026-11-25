@@ -1,0 +1,40 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "analysis": {
+      "analyzer": {
+        "vi_folded": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "asciifolding"]
+        }
+      },
+      "normalizer": {
+        "folded": {
+          "type": "custom",
+          "filter": ["lowercase", "asciifolding"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "petId":       { "type": "long" },
+      "petName":     { "type": "search_as_you_type", "analyzer": "vi_folded" },
+      "species":     { "type": "keyword" },
+      "breed": {
+        "type": "text",
+        "analyzer": "vi_folded",
+        "fields": { "keyword": { "type": "keyword", "normalizer": "folded" } }
+      },
+      "allergies":   { "type": "text", "analyzer": "vi_folded" },
+      "ownerId":     { "type": "long" },
+      "ownerUserId": { "type": "long" },
+      "ownerName":   { "type": "text", "analyzer": "vi_folded" },
+      "ownerPhone":  { "type": "keyword" },
+      "updatedAt":   { "type": "date", "format": "epoch_millis" }
+    }
+  }
+}

@@ -85,6 +85,14 @@ public class Pet extends Auditable {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "owner_id", nullable = false)
     private Owner owner;
+
+    /**
+     * Optimistic lock (V5). Incremented by Hibernate on every update of the row; also published
+     * in pet events so search-service can drop stale ones (Elasticsearch external versioning).
+     */
+    @Version
+    @Column(nullable = false)
+    private Long version;
     
     /**
      * Medical history records associated with this pet.

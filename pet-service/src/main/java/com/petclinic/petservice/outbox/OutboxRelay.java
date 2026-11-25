@@ -57,7 +57,7 @@ public class OutboxRelay {
 
     private void dispatch(OutboxEvent event) throws Exception {
         switch (event.getEventType()) {
-            case OutboxEvent.PET_CREATED ->
+            case OutboxEvent.PET_CREATED, OutboxEvent.PET_UPDATED ->
                     petEventPublisher.publish(event.getAggregateId(), event.getPayload());
             case OutboxEvent.BILLING_ACCOUNT_REQUESTED ->
                     billingClientService.createBillingAccount(BillingRequest.parseFrom(event.getPayload()));

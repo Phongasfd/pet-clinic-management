@@ -68,7 +68,12 @@ public class PetService {
             pet.setAllergies(allergies);
         }
 
-        return PetDto.Response.from(pet);
+        // Flush now so Hibernate bumps pets.version (optimistic lock: a concurrent update of the
+        // same pet fails here with 409 instead of being lost), then publish that version.
+        Pet saved = petRepository.saveAndFlush(pet);
+        outboxService.enqueuePetUpdated(saved);
+
+        return PetDto.Response.from(saved);
     }
 
     @Transactional(readOnly = true)
