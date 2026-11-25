@@ -51,6 +51,27 @@ services:
     networks:
       - petclinic-net
 
+  # Read model for full-text search (search-service). Single node, security off: local dev only,
+  # bound to 127.0.0.1. docker-compose.prod.yml turns security on.
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    container_name: petclinic-elasticsearch
+    ports:
+      - "127.0.0.1:9200:9200"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+    networks:
+      - petclinic-net
+
   # ================================================================
   # APPLICATION SERVICES
   # ================================================================
@@ -136,6 +157,25 @@ services:
     networks:
       - petclinic-net
 
+  search-service:
+    build:
+      context: .   # repo root: the image also builds proto-common
+      dockerfile: search-service/Dockerfile
+    container_name: search-service
+    ports:
+      - "127.0.0.1:8085:8085" # trusts X-User-* headers: must sit behind the gateway
+    environment:
+      - SPRING_ELASTICSEARCH_URIS=http://elasticsearch:9200
+      # consumer AND the DLT producer
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - petclinic-net
+
   api-gateway:
     build:
       context: ./api-gateway
@@ -146,11 +186,13 @@ services:
       - AUTH_SERVICE_URL=http://auth-service:8081
       - PET_SERVICE_URL=http://pet-service:8082
       - ANALYTICS_SERVICE_URL=http://analytics-service:8084
+      - SEARCH_SERVICE_URL=http://search-service:8085
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env (openssl rand -base64 32)}
     depends_on:
       - auth-service
       - pet-service
       - analytics-service
+      - search-service
     networks:
       - petclinic-net
 
@@ -160,3 +202,4 @@ networks:
 
 volumes:
   postgres-data:
+  elasticsearch-data:

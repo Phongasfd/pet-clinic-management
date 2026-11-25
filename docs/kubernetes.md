@@ -31,8 +31,8 @@ Nếu đã hiểu `docker-compose.yml` của dự án thì đã hiểu được 
 
 | Docker Compose | Kubernetes | Ở dự án này |
 | --- | --- | --- |
-| một `service:` chạy app | **Deployment** (quản lý ReplicaSet, ReplicaSet quản lý Pod) | 5 service trong `k8s/base/apps/` |
-| `postgres-db` có volume | **StatefulSet** + **PersistentVolumeClaim** | `postgres`, `kafka` |
+| một `service:` chạy app | **Deployment** (quản lý ReplicaSet, ReplicaSet quản lý Pod) | 6 service trong `k8s/base/apps/` |
+| `postgres-db` có volume | **StatefulSet** + **PersistentVolumeClaim** | `postgres`, `kafka`, `elasticsearch` |
 | tên service làm DNS (`kafka:9092`) | **Service** + DNS của cluster (`kafka.petclinic.svc.cluster.local`) | cùng tên với compose, trừ `postgres-db` → `postgres` |
 | `ports: "8080:8080"` | Service kiểu **NodePort** / **LoadBalancer**, hoặc **Ingress** | NodePort 30080 (local), Ingress (prod) |
 | `ports: "127.0.0.1:8082:8082"` (chỉ máy local) | Service **ClusterIP** (chỉ trong cluster) + **NetworkPolicy** | mọi service trừ gateway |
@@ -57,9 +57,12 @@ flowchart TB
         gw --> authsvc(["auth-service"]) --> auth["Deployment auth-service<br/>1 replica"]
         gw --> petsvc(["pet-service"]) --> pet["Deployment pet-service<br/>HPA 1-4"]
         gw --> ansvc(["analytics-service"]) --> an["Deployment analytics-service<br/>HPA 1-3 (= 3 partitions)"]
+        gw --> sesvc(["search-service"]) --> se["Deployment search-service<br/>HPA 1-3 (= 3 partitions)"]
         pet -.->|"gRPC (outbox)"| billsvc(["billing-service :9090"]) --> bill["Deployment billing-service<br/>gRPC readiness probe"]
         pet -.->|"pet-events"| kafka[("StatefulSet kafka<br/>PVC 2Gi")]
         kafka -.-> an
+        kafka -.-> se
+        se --> es[("StatefulSet elasticsearch<br/>alias pets, PVC 2Gi")]
         auth & pet & bill & an --> pg[("StatefulSet postgres<br/>4 databases, PVC 2Gi")]
         cron["CronJob outbox-maintenance<br/>03:00 Asia/Ho_Chi_Minh"] --> pg
     end
@@ -77,9 +80,10 @@ k8s/
 │   ├── kustomization.yaml         # danh sách resource, namespace, generator
 │   ├── namespace.yaml
 │   ├── config.env                 # -> ConfigMap petclinic-config
-│   ├── apps/                      # Deployment + Service cho 5 service
+│   ├── apps/                      # Deployment + Service cho 6 service
 │   ├── postgres/                  # StatefulSet + headless Service + init.sql
 │   ├── kafka/                     # StatefulSet KRaft + headless Service
+│   ├── elasticsearch/             # StatefulSet single-node + headless Service (read model của search-service)
 │   ├── autoscaling/hpa.yaml
 │   ├── network-policies.yaml
 │   └── jobs/                      # CronJob outbox-maintenance + script
@@ -96,10 +100,10 @@ Xem nhanh Kustomize sinh ra gì: `kubectl kustomize k8s/overlays/local | less`.
 
 ## 5. Chạy trên máy
 
-**Cần:** Docker, [kind](https://kind.sigs.k8s.io/) 0.24 trở lên, `kubectl`, `openssl`. Trên Windows chạy script bằng Git Bash hoặc WSL. Docker cần khoảng 5 GB RAM (5 JVM 512 MiB, Kafka 1 GiB, Postgres).
+**Cần:** Docker, [kind](https://kind.sigs.k8s.io/) 0.24 trở lên, `kubectl`, `openssl`. Trên Windows chạy script bằng Git Bash hoặc WSL. Docker cần khoảng 6 GB RAM (6 JVM 512 MiB, Kafka 1 GiB, Elasticsearch 1 GiB, Postgres).
 
 ```bash
-k8s/scripts/kind-up.sh        # tạo cluster, build 5 image, nạp vào kind, deploy, chờ Ready
+k8s/scripts/kind-up.sh        # tạo cluster, build 6 image, nạp vào kind, deploy, chờ Ready
 k8s/scripts/smoke-test.sh     # kiểm tra end-to-end (phần 8)
 k8s/scripts/kind-down.sh      # xóa cluster và toàn bộ dữ liệu
 ```
@@ -109,10 +113,10 @@ Gateway ở `http://localhost:8080` như khi chạy compose, nên các lệnh `c
 **Dùng minikube thay kind:**
 
 ```bash
-minikube start --cpus 4 --memory 6g --cni calico     # calico để NetworkPolicy có hiệu lực
+minikube start --cpus 4 --memory 7g --cni calico     # calico để NetworkPolicy có hiệu lực
 minikube addons enable metrics-server                # cho HPA
 k8s/scripts/build-images.sh dev
-for s in api-gateway auth-service pet-service billing-service analytics-service; do
+for s in api-gateway auth-service pet-service billing-service analytics-service search-service; do
   minikube image load petclinic/$s:dev
 done
 cp k8s/overlays/local/secrets.env.example k8s/overlays/local/secrets.env   # rồi điền giá trị
@@ -240,6 +244,9 @@ Những bẫy đã được xử lý sẵn trong manifest:
 | Volume có sẵn thư mục `lost+found` | `initdb: directory not empty`, Postgres không lên | `PGDATA=/var/lib/postgresql/data/pgdata`; Kafka dùng thư mục con `kraft-logs` |
 | Kafka chạy bằng user 1000 | Không ghi được vào volume | `fsGroup: 1000` |
 | `init.sql` chỉ chạy khi volume trống | Thêm database mới vào script không có tác dụng với cluster cũ | Như compose: tạo tay bằng `kubectl exec postgres-0 -- psql ...` |
+| Elasticsearch đòi `vm.max_map_count >= 262144` trên node | Bootstrap check làm node dừng; muốn sửa phải có init container privileged chỉnh sysctl của node | `discovery.type=single-node` (bootstrap check chỉ cảnh báo) + `node.store.allow_mmap=false` (dùng niofs, không cần mmap) |
+| Đĩa laptop / runner CI thường đầy hơn 90% | Disk watermark của Elasticsearch khóa index thành read-only, việc ghi lỗi âm thầm | `cluster.routing.allocation.disk.threshold_enabled=false` ở base; overlay `prod` bật lại |
+| Elasticsearch không có mật khẩu ở base | Pod nào trong cluster cũng đọc/xóa được index | NetworkPolicy chỉ cho search-service vào cổng 9200 (smoke test kiểm tra); overlay `prod` bật `xpack.security` với `ELASTIC_PASSWORD` từ Secret |
 
 Production nên dùng database managed (RDS, Cloud SQL) hoặc operator (CloudNativePG, Strimzi cho Kafka): backup, failover, nâng cấp. Tự viết StatefulSet là để học.
 
@@ -265,6 +272,7 @@ HPA đọc CPU từ metrics-server và chỉnh số replica: `replicas = ceil(hi
 | api-gateway | 1–3 | stateless |
 | pet-service | 1–4 | nhiều pod an toàn: mỗi pod có một OutboxRelay, `FOR UPDATE SKIP LOCKED` chia dòng outbox giữa các relay, không gửi trùng; Flyway giữ lock DB nên hai pod khởi động cùng lúc không migrate hai lần |
 | analytics-service | 1–3 | `pet-events` có 3 partition; trong một consumer group mỗi partition chỉ thuộc một consumer, pod thứ 4 sẽ ngồi không |
+| search-service | 1–3 | cùng lý do (consumer group `search-indexer`); nhiều pod an toàn vì external versioning biến lần ghi cũ/lặp sau rebalance thành no-op |
 
 auth-service và billing-service để cố định 1 replica: schema đang dùng `ddl-auto: update` và admin đầu tiên được tạo lúc khởi động, cả hai không được viết cho nhiều pod khởi động đồng thời.
 
@@ -279,10 +287,11 @@ pet-service tin header `X-User-Id`/`X-User-Role` vì gateway đặt chúng. Serv
 | Đích | Nguồn được phép | Cổng |
 | --- | --- | --- |
 | api-gateway | mọi nơi | 8080 |
-| auth / pet / analytics | api-gateway | 8081 / 8082 / 8084 |
+| auth / pet / analytics / search | api-gateway | 8081 / 8082 / 8084 / 8085 |
 | billing-service | pet-service | 9090 |
 | postgres | auth, pet, billing, analytics, outbox-maintenance | 5432 |
-| kafka | pet-service, analytics-service | 9092 |
+| kafka | pet-service, analytics-service, search-service | 9092 |
+| elasticsearch | search-service | 9200 |
 
 Thử tấn công (phần 7.4). NetworkPolicy chỉ có hiệu lực khi CNI hỗ trợ: kind 0.24+ (kindnet), Calico, Cilium. Flannel đơn thuần thì bỏ qua âm thầm, nên smoke test có bước kiểm tra chính điều này. Mức cao hơn là mTLS giữa các service (service mesh) để danh tính dựa trên chứng chỉ, không dựa trên IP.
 
@@ -415,14 +424,15 @@ k get hpa -w
 1. đăng ký, đăng nhập, tạo owner và pet;
 2. khách khác nhận 403 trên pet đó;
 3. analytics đếm được pet (pet-service → outbox → Kafka → analytics-service);
-4. outbox rỗng và billing có tài khoản cho owner (outbox → gRPC → billing-service);
-5. pod lạ không gọi được pet-service, pod mang label gateway thì gọi được;
-6. CronJob `outbox-maintenance` chạy thành công.
+4. search tìm thấy pet với từ gõ sai `mlu`, và chỉ chủ của nó thấy (Kafka → search-service → Elasticsearch);
+5. outbox rỗng và billing có tài khoản cho owner (outbox → gRPC → billing-service);
+6. pod lạ không gọi được pet-service và Elasticsearch; pod mang label gateway / search-service thì gọi được;
+7. CronJob `outbox-maintenance` chạy thành công.
 
 [`.github/workflows/ci-k8s.yml`](../.github/workflows/ci-k8s.yml) có hai job:
 
 - **validate**: render cả hai overlay bằng `kubectl kustomize` và kiểm từng object với schema Kubernetes 1.31 bằng `kubeconform -strict` (sai tên field, sai kiểu là đỏ ngay, mất vài giây);
-- **e2e**: dựng kind trong runner, build 5 image, deploy overlay `local`, chạy smoke test; lỗi thì in events, `describe` và log mọi pod.
+- **e2e**: dựng kind trong runner, build 6 image, deploy overlay `local`, chạy smoke test; lỗi thì in events, `describe` và log mọi pod.
 
 Đây là test xuyên service mà README trước đây ghi là còn thiếu.
 

@@ -17,4 +17,15 @@ message PetEvent {
   int64 owner_id = 8;
   // Dùng để lưu trữ doanh thu từ lịch hẹn (nếu có)
   double amount = 9;
+
+  // ---- Added for search-service (event-carried state transfer) ----
+  // PET_CREATED and PET_UPDATED carry a full snapshot of the pet, so a consumer can rebuild its
+  // read model from the event alone, without calling pet-service back.
+  int64 owner_user_id = 10; // auth-service user id of the owner; 0 = walk-in owner (no account)
+  string owner_name = 11;
+  string owner_phone = 12;
+  string allergies = 13;
+  // pets.version (JPA @Version) when the event was written. It grows with every change of the pet,
+  // so a consumer can tell a stale event (redelivered, or overtaken by a newer one) from a new one.
+  int64 version = 14;
 }

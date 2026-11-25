@@ -70,6 +70,29 @@ services:
       - petclinic-prod-net
     logging: *default-logging
 
+  # Read model for search-service. Security on (basic auth over the private network only; no
+  # port is published). Single node, so transport TLS is not required.
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    container_name: petclinic-elasticsearch-prod
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:?Set ELASTIC_PASSWORD in .env}
+      - ES_JAVA_OPTS=${ES_JAVA_OPTS:--Xms1g -Xmx1g}
+    volumes:
+      - elasticsearch-prod-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs -u \"elastic:$$ELASTIC_PASSWORD\" 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+    networks:
+      - petclinic-prod-net
+    logging: *default-logging
+
   # ============================================================================
   # BACKEND APPLICATION SERVICES (CÔ LẬP NỘI BỘ, KHÔNG EXPOSE RA INTERNET)
   # ============================================================================
@@ -162,6 +185,29 @@ services:
       - petclinic-prod-net
     logging: *default-logging
 
+  search-service:
+    build:
+      context: .   # repo root: the image also builds proto-common
+      dockerfile: search-service/Dockerfile
+    container_name: search-service-prod
+    restart: unless-stopped
+    environment:
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-prod}
+      - SPRING_ELASTICSEARCH_URIS=http://elasticsearch:9200
+      - SPRING_ELASTICSEARCH_USERNAME=elastic
+      - SPRING_ELASTICSEARCH_PASSWORD=${ELASTIC_PASSWORD:?Set ELASTIC_PASSWORD in .env}
+      # consumer AND the DLT producer
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - APP_KAFKA_TOPICS_PET-EVENTS=${KAFKA_TOPIC_PET_EVENTS:-pet-events}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - petclinic-prod-net
+    logging: *default-logging
+
   # ============================================================================
   # EDGE GATEWAY (PORTAL DUY NHẤT MỞ RA BÊN NGOÀI)
   # ============================================================================
@@ -178,11 +224,13 @@ services:
       - AUTH_SERVICE_URL=http://auth-service:8081
       - PET_SERVICE_URL=http://pet-service:8082
       - ANALYTICS_SERVICE_URL=http://analytics-service:8084
+      - SEARCH_SERVICE_URL=http://search-service:8085
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env (openssl rand -base64 32)}
     depends_on:
       - auth-service
       - pet-service
       - analytics-service
+      - search-service
     networks:
       - petclinic-prod-net
     logging: *default-logging
@@ -194,3 +242,4 @@ networks:
 volumes:
   postgres-prod-data:
   kafka-prod-data:
+  elasticsearch-prod-data:

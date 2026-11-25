@@ -2,6 +2,7 @@ package com.petclinic.petservice.exception;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -31,6 +32,14 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public ErrorResponse handleBadRequest(BadRequestException ex, HttpServletRequest request) {
         return buildErrorResponse(HttpStatus.BAD_REQUEST, ex.getMessage(), request, null);
+    }
+
+    /** Someone else changed the same row first (@Version mismatch): the client should reload and retry. */
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorResponse handleOptimisticLock(ObjectOptimisticLockingFailureException ex, HttpServletRequest request) {
+        return buildErrorResponse(HttpStatus.CONFLICT,
+                "The resource was modified concurrently, reload it and try again", request, null);
     }
 
     /** Wrong role (@PreAuthorize) or someone else's data (AccessGuard). */

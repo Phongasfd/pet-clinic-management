@@ -45,6 +45,10 @@ spring:
           uri: ${ANALYTICS_SERVICE_URL:http://localhost:8084}
           predicates:
             - Path=/api/v1/analytics/**
+        - id: search-service
+          uri: ${SEARCH_SERVICE_URL:http://localhost:8085}
+          predicates:
+            - Path=/api/v1/search/**
 
 jwt:
   # Same value as auth-service; no default on purpose (see auth-service application.yml)

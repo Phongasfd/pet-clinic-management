@@ -16,10 +16,12 @@ resources:
   - namespace.yaml
   - postgres/postgres.yaml
   - kafka/kafka.yaml
+  - elasticsearch/elasticsearch.yaml
   - apps/auth-service.yaml
   - apps/pet-service.yaml
   - apps/billing-service.yaml
   - apps/analytics-service.yaml
+  - apps/search-service.yaml
   - apps/api-gateway.yaml
   - autoscaling/hpa.yaml
   - network-policies.yaml

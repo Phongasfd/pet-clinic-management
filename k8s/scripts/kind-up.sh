@@ -8,7 +8,7 @@ cd "$(dirname "$0")/../.."
 
 CLUSTER="${CLUSTER:-petclinic}"
 NS=petclinic
-SERVICES="api-gateway auth-service pet-service billing-service analytics-service"
+SERVICES="api-gateway auth-service pet-service billing-service analytics-service search-service"
 SECRETS=k8s/overlays/local/secrets.env
 
 # A rollout that times out only says "timed out waiting for the condition". Print why,
@@ -41,10 +41,11 @@ fi
 
 kubectl apply -k k8s/overlays/local
 
-echo "waiting for the database and the broker..."
+echo "waiting for the database, the broker and the search engine..."
 kubectl -n "$NS" rollout status statefulset/postgres --timeout=300s
 kubectl -n "$NS" rollout status statefulset/kafka --timeout=300s
-echo "waiting for the services (first start of five JVMs takes a few minutes)..."
+kubectl -n "$NS" rollout status statefulset/elasticsearch --timeout=300s
+echo "waiting for the services (first start of six JVMs takes a few minutes)..."
 for svc in $SERVICES; do
   kubectl -n "$NS" rollout status "deployment/${svc}" --timeout=600s
 done

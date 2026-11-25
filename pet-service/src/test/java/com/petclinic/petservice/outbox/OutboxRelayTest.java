@@ -56,6 +56,18 @@ class OutboxRelayTest {
     }
 
     @Test
+    void publishesPetUpdatedToTheSameTopic() throws Exception {
+        byte[] payload = {4, 5, 6};
+        OutboxEvent event = OutboxEvent.of(OutboxEvent.PET_UPDATED, "42", payload, NOW);
+        pending(event);
+
+        relay.relayPendingEvents();
+
+        verify(petEventPublisher).publish("42", payload);
+        assertEquals(NOW, event.getProcessedAt());
+    }
+
+    @Test
     void sendsBillingRequestAndMarksProcessed() {
         BillingRequest request = BillingRequest.newBuilder().setCustomerId("7").setCustomerName("An").build();
         OutboxEvent event = OutboxEvent.of(OutboxEvent.BILLING_ACCOUNT_REQUESTED, "7", request.toByteArray(), NOW);

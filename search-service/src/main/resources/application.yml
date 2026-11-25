@@ -1,0 +1,57 @@
+server:
+  port: 8085
+  # Kubernetes / compose send SIGTERM on every rollout: finish in-flight requests, then exit
+  shutdown: graceful
+
+# /actuator/health/liveness and /actuator/health/readiness (probes). Only health is exposed.
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+spring:
+  application:
+    name: search-service
+
+  # ----------------------------------------------------------------
+  # Elasticsearch: Spring Boot builds the RestClient + ElasticsearchClient from these.
+  # Credentials (prod): SPRING_ELASTICSEARCH_USERNAME / SPRING_ELASTICSEARCH_PASSWORD
+  # ----------------------------------------------------------------
+  elasticsearch:
+    uris: http://localhost:9200
+    connection-timeout: 2s
+    socket-timeout: 10s
+
+  kafka:
+    # consumer AND the producer of the dead-letter topic
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+    consumer:
+      # its own group: every pet event reaches analytics AND search, each with its own offsets
+      group-id: search-indexer
+      # a new deployment replays the topic from the start and builds the index from the events
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      properties:
+        # same reason as analytics-service: KafkaConsumerConfig declares pet-events with 3 partitions,
+        # the consumer must not auto-create it with 1
+        allow.auto.create.topics: false
+
+app:
+  kafka:
+    topics:
+      pet-events: pet-events
+      # not the shared pet-events.DLT: a message parked here failed for search only
+      dead-letter: pet-events.search-indexer.DLT
+  search:
+    # Reads and writes go through the alias, never the concrete index: a new mapping is built in
+    # pets-v2 and the alias is switched atomically, with no downtime and no client change.
+    index-alias: pets
+    index-name: pets-v1
+    # Elasticsearch may still be starting (compose / k8s): retry before giving up
+    startup-attempts: 30
+    startup-retry-delay: 2s

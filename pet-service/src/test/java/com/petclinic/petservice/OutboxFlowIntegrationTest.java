@@ -16,16 +16,21 @@ import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.mockito.ArgumentMatcher;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.petclinic.petservice.security.Role.CUSTOMER;
 import static com.petclinic.petservice.security.Role.RECEPTIONIST;
+import static com.petclinic.petservice.security.Role.VET;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /** The outbox end to end: business write → outbox row → relay → Kafka / billing gRPC, with retries. */
 class OutboxFlowIntegrationTest extends AbstractIntegrationTest {
@@ -58,9 +63,48 @@ class OutboxFlowIntegrationTest extends AbstractIntegrationTest {
             assertEquals(ownerId, event.getOwnerId());
             assertEquals("DOG", event.getSpecies());
             assertFalse(event.getEventId().isBlank(), "consumers dedupe on eventId");
+            // full snapshot for search-service
+            assertEquals(0L, event.getVersion());
+            assertTrue(event.getOwnerName().startsWith("Walk-in "));
+            assertFalse(event.getOwnerPhone().isBlank());
+            assertEquals(0L, event.getOwnerUserId(), "walk-in owner created by staff has no account");
         }
 
         await().atMost(Duration.ofSeconds(10)).until(() -> processedAt("PET_CREATED", petId) != null);
+    }
+
+    @Test
+    void healthInfoUpdateIsPublishedAsSnapshotWithANewVersion() throws Exception {
+        long customerId = newUserId();
+        long ownerId = createOwnerAs(CUSTOMER, customerId, "Nguyen Van " + UUID.randomUUID());
+        long petId = addPetAs(CUSTOMER, customerId, ownerId);
+
+        mockMvc.perform(patch("/api/v1/pets/{id}/health-info", petId).with(as(VET, newUserId()))
+                        .param("allergies", "penicillin"))
+                .andExpect(status().isOk());
+
+        List<PetEvent> events = new ArrayList<>();
+        Map<String, Object> props = KafkaTestUtils.consumerProps("outbox-it-" + UUID.randomUUID(), "false", kafka);
+        try (Consumer<String, byte[]> consumer = new DefaultKafkaConsumerFactory<>(
+                props, new StringDeserializer(), new ByteArrayDeserializer()).createConsumer()) {
+            consumer.subscribe(List.of("pet-events"));
+            await().atMost(Duration.ofSeconds(30)).until(() -> {
+                for (ConsumerRecord<String, byte[]> record : consumer.poll(Duration.ofMillis(500))) {
+                    if (String.valueOf(petId).equals(record.key())) {
+                        events.add(PetEvent.parseFrom(record.value()));
+                    }
+                }
+                return events.size() >= 2;
+            });
+        }
+
+        PetEvent created = events.get(0);
+        PetEvent updated = events.get(1);
+        assertEquals("PET_CREATED", created.getEventType());
+        assertEquals("PET_UPDATED", updated.getEventType());
+        assertEquals("penicillin", updated.getAllergies());
+        assertEquals(customerId, updated.getOwnerUserId(), "search-service filters customers by it");
+        assertTrue(updated.getVersion() > created.getVersion(), "a newer state must carry a higher version");
     }
 
     @Test

@@ -22,6 +22,8 @@ public class OutboxEvent {
 
     /** Payload: serialized {@code PetEvent}, published to Kafka. */
     public static final String PET_CREATED = "PET_CREATED";
+    /** Payload: serialized {@code PetEvent} (full snapshot after the change), published to Kafka. */
+    public static final String PET_UPDATED = "PET_UPDATED";
     /** Payload: serialized {@code BillingRequest}, sent to billing-service over gRPC. */
     public static final String BILLING_ACCOUNT_REQUESTED = "BILLING_ACCOUNT_REQUESTED";
 

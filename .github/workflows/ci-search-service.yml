@@ -1,0 +1,51 @@
+name: CI — search-service
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    paths:
+      - 'search-service/**'
+      - 'proto-common/**'
+      - '.github/workflows/ci-search-service.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+    paths:
+      - 'search-service/**'
+      - 'proto-common/**'
+      - '.github/workflows/ci-search-service.yml'
+
+jobs:
+  build:
+    name: Build & Test search-service
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      # proto-common must be in the local Maven repository first
+      - name: Build & install proto-common
+        working-directory: proto-common
+        run: mvn install -DskipTests -B
+
+      # Unit tests + PetSearchIntegrationTest against a real Elasticsearch 8.13 (Testcontainers;
+      # the runner has Docker, so the integration test is not skipped here)
+      - name: Build & Test search-service
+        working-directory: search-service
+        run: mvn verify -B
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-service-test-reports
+          path: search-service/target/surefire-reports/
+          retention-days: 7
+          if-no-files-found: ignore
